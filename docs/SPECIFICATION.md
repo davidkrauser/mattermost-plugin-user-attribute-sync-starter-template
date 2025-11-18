@@ -414,6 +414,9 @@ Demonstrate patterns that work with:
 - Given user data with array field "security_clearance", system creates multiselect PropertyField
 - Field mappings persist across plugin restarts
 
+**Implementation Note:**
+Field discovery is implemented in `discoverFields()` which scans all user records and collects unique field names (excluding "email"). Fields with nil values are skipped silently - the function continues scanning to find a non-nil sample value from other users. Field name transformation is handled by `toDisplayName()` which converts snake_case and kebab-case to Title Case (e.g., "security_clearance" → "Security Clearance").
+
 #### FR2: Type Inference
 **Requirement:** The plugin SHALL infer PropertyField types from JSON data structure.
 
@@ -428,6 +431,13 @@ Demonstrate patterns that work with:
 - Array ["Level1", "Level2"] inferred as multiselect field
 - String "Engineering" inferred as text field
 - Once created, field type never changes
+
+**Implementation Note:**
+The date pattern regex validates not just format but also month (01-12) and day (01-31) ranges:
+```go
+var datePatternRegex = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$`)
+```
+This enhanced validation catches invalid dates like "2023-13-01" or "2023-01-99" at type inference time. The function is named `inferFieldType()` and returns `model.PropertyFieldType`.
 
 #### FR3: Incremental User Synchronization
 **Requirement:** The plugin SHALL support incremental synchronization, processing only users whose attributes have changed since the last successful sync.
@@ -1655,6 +1665,23 @@ field := &model.PropertyField{
 createdField, err := pluginAPI.Property.CreatePropertyField(field)
 ```
 
+**Implementation Note:**
+The actual implementation uses the `Name` field directly for display (transformed via `toDisplayName()`) and sets CPA attributes for externally-managed fields:
+```go
+field := &model.PropertyField{
+    GroupID: groupID,
+    Name:    toDisplayName(fieldName), // User-friendly display name
+    Type:    fieldType,
+    Attrs: model.StringInterface{
+        model.CustomProfileAttributesPropertyAttrsVisibility:
+            model.CustomProfileAttributesVisibilityHidden, // Don't show in profile
+        model.CustomProfileAttributesPropertyAttrsManaged:
+            "admin", // Users cannot edit
+    },
+}
+```
+Fields are set to "hidden" visibility because they're managed by an external system and not meant for manual display in Mattermost. The "admin" managed attribute prevents users from editing these fields through the UI, ensuring data consistency with the external source.
+
 **Field Types:**
 - `model.PropertyFieldTypeText` - Single-line text
 - `model.PropertyFieldTypeSelect` - Single selection from options
@@ -1876,6 +1903,16 @@ patch := &model.PropertyFieldPatch{
 ```
 
 **Key Insight:** Always preserve existing option IDs to avoid breaking user values that reference those IDs.
+
+**Implementation Note:**
+The actual implementation uses `UpdatePropertyField()` with the full field object rather than `PropertyFieldPatch`. The `mergeOptions()` function implements the append-only strategy by:
+1. Building a map of existing option names → IDs for fast lookup
+2. Starting with all existing options (preserving everything)
+3. For each new value, checking if it already exists before generating a new ID
+4. Computing new option IDs once and reusing them (avoiding redundant `model.NewId()` calls)
+5. Returning both the merged options list and a count of newly added options
+
+The orchestrator (`updateMultiselectOptions()`) only calls `UpdatePropertyField()` if new options were actually added, minimizing unnecessary API calls.
 
 #### C.3 Socket Client for Elevated Operations
 

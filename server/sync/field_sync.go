@@ -171,3 +171,87 @@ func extractMultiselectOptions(users []map[string]interface{}, fieldName string)
 
 	return options
 }
+
+// mergeOptions combines existing multiselect options with new option values, implementing
+// the append-only option management strategy.
+//
+// This function is critical for maintaining data integrity in multiselect fields.
+// It ensures that:
+//  1. Existing options retain their IDs (prevents orphaning user values)
+//  2. New options get new IDs (allows users to select new values)
+//  3. No options are ever removed (append-only strategy)
+//
+// Append-only strategy rationale:
+// If an option is removed from a multiselect field, any user values that reference
+// that option's ID become orphaned - the UI can't display them, but they still exist
+// in the database. This creates data inconsistency and confuses users.
+//
+// Instead, we append new options while preserving all existing ones. Even if an option
+// is no longer present in the source data, we keep it in the field definition so that
+// historical user values remain valid.
+//
+// Merge algorithm:
+//  1. Build a map of existing option names → IDs for fast lookup
+//  2. Start with all existing options (preserve everything)
+//  3. For each new value:
+//     - If it matches an existing option name, skip (already in list with correct ID)
+//     - If it's new, generate a new ID and append to list
+//  4. Return merged list and count of newly added options
+//
+// ID preservation importance:
+// PropertyValue records store option IDs, not option names. If we change an option's
+// ID, all existing user values would become invalid. By preserving IDs, we ensure
+// that user values continue to work correctly across syncs.
+//
+// Parameters:
+//   - existingOptions: Current options from the field definition (from PropertyService API)
+//   - newValues: New option names discovered from current sync data
+//
+// Returns:
+//   - Merged options list (existing + new)
+//   - Count of newly added options (0 if all values already existed)
+func mergeOptions(existingOptions []map[string]interface{}, newValues []string) ([]map[string]interface{}, int) {
+	// Build map of existing option names → IDs for fast lookup
+	existingMap := make(map[string]string)
+	for _, option := range existingOptions {
+		// Extract name and ID from option map
+		name, nameOk := option["name"].(string)
+		id, idOk := option["id"].(string)
+		if nameOk && idOk {
+			existingMap[name] = id
+		}
+	}
+
+	// Start with all existing options (append-only strategy)
+	merged := make([]map[string]interface{}, len(existingOptions))
+	copy(merged, existingOptions)
+
+	// Track count of new options added
+	newCount := 0
+
+	// Add new options that don't already exist
+	for _, value := range newValues {
+		// Skip if this option already exists
+		if _, exists := existingMap[value]; exists {
+			continue
+		}
+
+		// Generate new ID for this option
+		newID := model.NewId()
+
+		// Create new option
+		newOption := map[string]interface{}{
+			"id":   newID,
+			"name": value,
+		}
+
+		// Add to merged list
+		merged = append(merged, newOption)
+		newCount++
+
+		// Add to map to prevent duplicates within newValues
+		existingMap[value] = newID
+	}
+
+	return merged, newCount
+}

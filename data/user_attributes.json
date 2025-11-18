@@ -1,0 +1,23 @@
+[
+  {
+    "email": "john.doe@example.com",
+    "department": "Engineering",
+    "location": "US-East",
+    "programs": ["Apples", "Oranges"],
+    "start_date": "2023-01-15"
+  },
+  {
+    "email": "jane.smith@example.com",
+    "department": "Sales",
+    "location": "US-West",
+    "programs": ["Lemons"],
+    "start_date": "2022-08-01"
+  },
+  {
+    "email": "bob.wilson@example.com",
+    "department": "Engineering",
+    "location": "EU-Central",
+    "programs": ["Apples", "Lemons"],
+    "start_date": "2024-03-20"
+  }
+]

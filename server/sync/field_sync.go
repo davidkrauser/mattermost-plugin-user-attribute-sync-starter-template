@@ -255,3 +255,246 @@ func mergeOptions(existingOptions []map[string]interface{}, newValues []string) 
 
 	return merged, newCount
 }
+
+// syncFields orchestrates the complete field synchronization process for Custom Profile Attributes.
+// This function coordinates field discovery, type inference, field creation, and option management
+// to ensure all fields discovered in the user data exist in Mattermost with correct definitions.
+//
+// Orchestration flow:
+//  1. Discover all unique fields from user data (excluding "email")
+//  2. For each discovered field:
+//     a. Check if field already exists (lookup in KVStore)
+//     b. If new: infer type, create field, handle multiselect options
+//     c. If existing multiselect: extract and merge new options
+//  3. Return complete field name → ID mapping for value synchronization
+//
+// Why orchestrator pattern:
+// This function separates high-level coordination logic from low-level operations.
+// Each helper function (discoverFields, createPropertyField, mergeOptions) handles
+// one specific task with clear inputs/outputs. The orchestrator combines them into
+// a coherent workflow, making the code testable and maintainable.
+//
+// Graceful degradation:
+// If a single field fails to create or update, we log the error but continue with
+// remaining fields. This prevents one problematic field from blocking the entire
+// sync. The field mapping returned will simply exclude the failed field.
+//
+// KVStore caching:
+// Field IDs are cached in KVStore to avoid redundant API calls. On first sync,
+// fields are created and mappings are saved. On subsequent syncs, we use cached
+// mappings and only update multiselect options if needed.
+//
+// Multiselect option handling:
+//   - New fields: Extract options from data, create field with options
+//   - Existing fields: Extract options, query current options, merge, update if changed
+//
+// Parameters:
+//   - client: pluginapi.Client for Mattermost API access
+//   - groupID: Custom Profile Attributes group ID
+//   - users: User records containing field data
+//   - store: KVStore for field mapping persistence
+//
+// Returns:
+//   - Map of field name → field ID for all successfully synced fields
+//   - Error only if catastrophic failure (returned map may be partial on field-level errors)
+func syncFields(
+	client *pluginapi.Client,
+	groupID string,
+	users []map[string]interface{},
+	store kvstore.KVStore,
+) (map[string]string, error) {
+	// Discover all fields from user data
+	discoveredFields := discoverFields(users)
+
+	// Build field mapping (name → ID) as we process each field
+	fieldMapping := make(map[string]string)
+
+	// Process each discovered field
+	for fieldName, sampleValue := range discoveredFields {
+		// Check if field already exists
+		existingFieldID, err := store.GetFieldMapping(fieldName)
+		if err != nil {
+			// Log error but continue - we'll try to create the field
+			client.Log.Warn("Failed to check field mapping from KVStore",
+				"field", fieldName,
+				"error", err.Error(),
+			)
+		}
+
+		if existingFieldID != "" {
+			// Field already exists - add to mapping
+			fieldMapping[fieldName] = existingFieldID
+
+			// If it's a multiselect field, check if we need to add new options
+			fieldType := inferFieldType(sampleValue)
+			if fieldType == model.PropertyFieldTypeMultiselect {
+				if err = updateMultiselectOptions(client, groupID, existingFieldID, fieldName, users, store); err != nil {
+					client.Log.Warn("Failed to update multiselect options",
+						"field", fieldName,
+						"error", err.Error(),
+					)
+					// Continue - field exists and is usable even if option update failed
+				}
+			}
+
+			continue
+		}
+
+		// Field doesn't exist - create it
+		fieldType := inferFieldType(sampleValue)
+
+		// For multiselect fields, extract options before creation
+		var createdField *model.PropertyField
+		if fieldType == model.PropertyFieldTypeMultiselect {
+			createdField, err = createMultiselectFieldWithOptions(client, groupID, fieldName, users, store)
+		} else {
+			createdField, err = createPropertyField(client, groupID, fieldName, fieldType, store)
+		}
+
+		if err != nil {
+			client.Log.Error("Failed to create field",
+				"field", fieldName,
+				"type", fieldType,
+				"error", err.Error(),
+			)
+			// Continue with other fields - graceful degradation
+			continue
+		}
+
+		// Add to mapping
+		fieldMapping[fieldName] = createdField.ID
+	}
+
+	return fieldMapping, nil
+}
+
+// createMultiselectFieldWithOptions creates a multiselect field with initial options extracted
+// from user data.
+func createMultiselectFieldWithOptions(
+	client *pluginapi.Client,
+	groupID string,
+	fieldName string,
+	users []map[string]interface{},
+	store kvstore.KVStore,
+) (*model.PropertyField, error) {
+	// Extract all unique option values from user data
+	optionValues := extractMultiselectOptions(users, fieldName)
+
+	// Build options list with generated IDs
+	options := make([]map[string]interface{}, len(optionValues))
+	for i, value := range optionValues {
+		options[i] = map[string]interface{}{
+			"id":   model.NewId(),
+			"name": value,
+		}
+	}
+
+	// Create field with options in Attrs
+	field := &model.PropertyField{
+		GroupID: groupID,
+		Name:    toDisplayName(fieldName),
+		Type:    model.PropertyFieldTypeMultiselect,
+		Attrs: model.StringInterface{
+			model.CustomProfileAttributesPropertyAttrsVisibility: model.CustomProfileAttributesVisibilityHidden,
+			model.CustomProfileAttributesPropertyAttrsManaged:    "admin",
+			model.PropertyFieldAttributeOptions:                  options,
+		},
+	}
+
+	createdField, err := client.Property.CreatePropertyField(field)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create multiselect field %s", fieldName)
+	}
+
+	// Save field mapping
+	if err := store.SaveFieldMapping(fieldName, createdField.ID); err != nil {
+		return createdField, errors.Wrapf(err, "field created but failed to save mapping for %s", fieldName)
+	}
+
+	// Save initial options to KVStore for future merging
+	optionsMap := make(map[string]string)
+	for _, opt := range options {
+		optionsMap[opt["name"].(string)] = opt["id"].(string)
+	}
+	if err := store.SaveFieldOptions(fieldName, optionsMap); err != nil {
+		client.Log.Warn("Failed to save field options to KVStore",
+			"field", fieldName,
+			"error", err.Error(),
+		)
+	}
+
+	return createdField, nil
+}
+
+// updateMultiselectOptions checks if new options need to be added to an existing multiselect field
+// and updates the field if necessary.
+func updateMultiselectOptions(
+	client *pluginapi.Client,
+	groupID string,
+	fieldID string,
+	fieldName string,
+	users []map[string]interface{},
+	store kvstore.KVStore,
+) error {
+	// Extract current option values from user data
+	newOptionValues := extractMultiselectOptions(users, fieldName)
+	if len(newOptionValues) == 0 {
+		return nil // No options to add
+	}
+
+	// Get current field definition
+	field, err := client.Property.GetPropertyField(groupID, fieldID)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get field %s", fieldName)
+	}
+
+	// Extract existing options from field
+	existingOptions := []map[string]interface{}{}
+	if optionsAttr, ok := field.Attrs[model.PropertyFieldAttributeOptions]; ok {
+		if optionsArray, ok := optionsAttr.([]interface{}); ok {
+			for _, opt := range optionsArray {
+				if optMap, ok := opt.(map[string]interface{}); ok {
+					existingOptions = append(existingOptions, optMap)
+				}
+			}
+		}
+	}
+
+	// Merge options (append-only)
+	mergedOptions, newCount := mergeOptions(existingOptions, newOptionValues)
+
+	// If no new options, nothing to update
+	if newCount == 0 {
+		return nil
+	}
+
+	// Update field with merged options
+	field.Attrs[model.PropertyFieldAttributeOptions] = mergedOptions
+	_, err = client.Property.UpdatePropertyField(groupID, field)
+	if err != nil {
+		return errors.Wrapf(err, "failed to update options for field %s", fieldName)
+	}
+
+	// Update KVStore with new options mapping
+	optionsMap := make(map[string]string)
+	for _, opt := range mergedOptions {
+		if name, nameOk := opt["name"].(string); nameOk {
+			if id, idOk := opt["id"].(string); idOk {
+				optionsMap[name] = id
+			}
+		}
+	}
+	if err := store.SaveFieldOptions(fieldName, optionsMap); err != nil {
+		client.Log.Warn("Failed to save updated field options to KVStore",
+			"field", fieldName,
+			"error", err.Error(),
+		)
+	}
+
+	client.Log.Info("Added new options to multiselect field",
+		"field", fieldName,
+		"new_count", newCount,
+	)
+
+	return nil
+}

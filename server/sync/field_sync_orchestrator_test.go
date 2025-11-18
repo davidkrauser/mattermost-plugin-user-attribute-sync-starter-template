@@ -18,7 +18,7 @@ func TestSyncFields(t *testing.T) {
 	t.Run("creates new fields on first sync", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -29,8 +29,8 @@ func TestSyncFields(t *testing.T) {
 		}
 
 		// Mock KVStore - no existing fields
-		store.On("GetFieldMapping", "department").Return("", nil)
-		store.On("GetFieldMapping", "location").Return("", nil)
+		cache.On("GetFieldID", "department").Return("", nil)
+		cache.On("GetFieldID", "location").Return("", nil)
 
 		// Mock field creation
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
@@ -42,23 +42,23 @@ func TestSyncFields(t *testing.T) {
 		})).Return(&model.PropertyField{ID: "loc-id", Name: "Location"}, nil)
 
 		// Mock KVStore saves
-		store.On("SaveFieldMapping", "department", "dept-id").Return(nil)
-		store.On("SaveFieldMapping", "location", "loc-id").Return(nil)
+		cache.On("SaveFieldMapping", "department", "dept-id").Return(nil)
+		cache.On("SaveFieldMapping", "location", "loc-id").Return(nil)
 
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 2)
 		assert.Equal(t, "dept-id", mapping["department"])
 		assert.Equal(t, "loc-id", mapping["location"])
 		api.AssertExpectations(t)
-		store.AssertExpectations(t)
+		cache.AssertExpectations(t)
 	})
 
 	t.Run("reuses existing fields", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -68,22 +68,22 @@ func TestSyncFields(t *testing.T) {
 		}
 
 		// Mock KVStore - field exists
-		store.On("GetFieldMapping", "department").Return("existing-dept-id", nil)
+		cache.On("GetFieldID", "department").Return("existing-dept-id", nil)
 
 		// No field creation should occur
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 1)
 		assert.Equal(t, "existing-dept-id", mapping["department"])
 		api.AssertNotCalled(t, "CreatePropertyField")
-		store.AssertExpectations(t)
+		cache.AssertExpectations(t)
 	})
 
 	t.Run("creates multiselect field with options", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -96,7 +96,7 @@ func TestSyncFields(t *testing.T) {
 			},
 		}
 
-		store.On("GetFieldMapping", "programs").Return("", nil)
+		cache.On("GetFieldID", "programs").Return("", nil)
 
 		// Mock field creation with options
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
@@ -107,24 +107,24 @@ func TestSyncFields(t *testing.T) {
 			return ok && len(options) == 3 // Alpha, Beta, Gamma
 		})).Return(&model.PropertyField{ID: "programs-id"}, nil)
 
-		store.On("SaveFieldMapping", "programs", "programs-id").Return(nil)
-		store.On("SaveFieldOptions", "programs", mock.Anything).Return(nil)
+		cache.On("SaveFieldMapping", "programs", "programs-id").Return(nil)
+		cache.On("SaveFieldOptions", "programs", mock.Anything).Return(nil)
 
 		// Mock logging (may log warnings if things fail)
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Equal(t, "programs-id", mapping["programs"])
 		api.AssertExpectations(t)
-		store.AssertExpectations(t)
+		cache.AssertExpectations(t)
 	})
 
 	t.Run("updates existing multiselect field with new options", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -133,7 +133,7 @@ func TestSyncFields(t *testing.T) {
 			},
 		}
 
-		store.On("GetFieldMapping", "programs").Return("existing-programs-id", nil)
+		cache.On("GetFieldID", "programs").Return("existing-programs-id", nil)
 
 		// Mock getting existing field
 		existingField := &model.PropertyField{
@@ -155,23 +155,23 @@ func TestSyncFields(t *testing.T) {
 			return ok && len(options) == 3 // Alpha, Beta, + Gamma
 		})).Return(existingField, nil)
 
-		store.On("SaveFieldOptions", "programs", mock.Anything).Return(nil)
+		cache.On("SaveFieldOptions", "programs", mock.Anything).Return(nil)
 
 		// Mock logging (updateMultiselectOptions logs when it adds options)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Equal(t, "existing-programs-id", mapping["programs"])
 		api.AssertExpectations(t)
-		store.AssertExpectations(t)
+		cache.AssertExpectations(t)
 	})
 
 	t.Run("skips multiselect update when no new options", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -180,7 +180,7 @@ func TestSyncFields(t *testing.T) {
 			},
 		}
 
-		store.On("GetFieldMapping", "programs").Return("existing-programs-id", nil)
+		cache.On("GetFieldID", "programs").Return("existing-programs-id", nil)
 
 		// Mock getting existing field with all options already present
 		existingField := &model.PropertyField{
@@ -197,18 +197,18 @@ func TestSyncFields(t *testing.T) {
 		api.On("GetPropertyField", groupID, "existing-programs-id").Return(existingField, nil)
 
 		// UpdatePropertyField should NOT be called (no new options)
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Equal(t, "existing-programs-id", mapping["programs"])
 		api.AssertNotCalled(t, "UpdatePropertyField")
-		store.AssertExpectations(t)
+		cache.AssertExpectations(t)
 	})
 
 	t.Run("handles partial failures gracefully", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -218,8 +218,8 @@ func TestSyncFields(t *testing.T) {
 			},
 		}
 
-		store.On("GetFieldMapping", "department").Return("", nil)
-		store.On("GetFieldMapping", "location").Return("", nil)
+		cache.On("GetFieldID", "department").Return("", nil)
+		cache.On("GetFieldID", "location").Return("", nil)
 
 		// Department creation fails
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
@@ -231,12 +231,12 @@ func TestSyncFields(t *testing.T) {
 			return f.Name == "Location"
 		})).Return(&model.PropertyField{ID: "loc-id"}, nil)
 
-		store.On("SaveFieldMapping", "location", "loc-id").Return(nil)
+		cache.On("SaveFieldMapping", "location", "loc-id").Return(nil)
 
 		// Mock logging (will log error for department failure)
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		// Should not return error (graceful degradation)
 		require.NoError(t, err)
@@ -249,11 +249,11 @@ func TestSyncFields(t *testing.T) {
 	t.Run("handles empty users", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{}
 
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Empty(t, mapping)
@@ -263,7 +263,7 @@ func TestSyncFields(t *testing.T) {
 	t.Run("handles mixed new and existing fields", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -274,16 +274,16 @@ func TestSyncFields(t *testing.T) {
 		}
 
 		// Department exists, location is new
-		store.On("GetFieldMapping", "department").Return("existing-dept-id", nil)
-		store.On("GetFieldMapping", "location").Return("", nil)
+		cache.On("GetFieldID", "department").Return("existing-dept-id", nil)
+		cache.On("GetFieldID", "location").Return("", nil)
 
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.Name == "Location"
 		})).Return(&model.PropertyField{ID: "loc-id"}, nil)
 
-		store.On("SaveFieldMapping", "location", "loc-id").Return(nil)
+		cache.On("SaveFieldMapping", "location", "loc-id").Return(nil)
 
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 2)
@@ -294,7 +294,7 @@ func TestSyncFields(t *testing.T) {
 	t.Run("excludes email field", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-		store := &mockKVStore{}
+		cache := &mockFieldCache{}
 
 		users := []map[string]interface{}{
 			{
@@ -303,9 +303,9 @@ func TestSyncFields(t *testing.T) {
 			},
 		}
 
-		store.On("GetFieldMapping", "department").Return("dept-id", nil)
+		cache.On("GetFieldID", "department").Return("dept-id", nil)
 
-		mapping, err := syncFields(client, groupID, users, store)
+		mapping, err := syncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 1)

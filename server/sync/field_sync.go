@@ -4,14 +4,12 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/pkg/errors"
-
-	"github.com/mattermost/user-attribute-sync-starter-template/server/store/kvstore"
 )
 
 // createPropertyField creates a new Custom Profile Attribute field in Mattermost.
 // This function builds the PropertyField struct with appropriate visibility and management
 // attributes, calls the Mattermost API to create the field, and persists the field mapping
-// in KVStore for future lookups.
+// via FieldCache for future lookups.
 //
 // Field creation process:
 //  1. Build PropertyField struct with GroupID, Name, Type, and Attrs
@@ -19,12 +17,12 @@ import (
 //  3. Set visibility to "hidden" (not shown in profile or user card by default)
 //  4. Set managed to "admin" (users cannot edit, only admins/plugins can set values)
 //  5. Call CreatePropertyField API
-//  6. Save field name → field ID mapping in KVStore
+//  6. Save field name → field ID mapping via FieldCache
 //
-// Why save to KVStore:
-// The field mapping must persist across plugin restarts. On subsequent syncs, we
-// check KVStore first to avoid creating duplicate fields. Field IDs are needed for
-// all value synchronization operations.
+// Why use FieldCache:
+// The field mapping must persist across plugin restarts (FieldCache writes to KVStore)
+// and be available in-memory during the current sync (for value synchronization).
+// The cache provides both persistence and performance.
 //
 // Hidden visibility:
 // Fields are set to hidden because they're managed by an external system. Users
@@ -37,7 +35,7 @@ import (
 // would be overwritten on the next sync. This setting ensures data consistency.
 //
 // Error handling:
-// If field creation fails, the error is returned to the caller. The KVStore mapping
+// If field creation fails, the error is returned to the caller. The cache mapping
 // is only saved if field creation succeeds. This ensures the plugin can retry creation
 // on the next sync if there's a transient failure.
 //
@@ -46,17 +44,17 @@ import (
 //   - groupID: The Custom Profile Attributes group ID
 //   - fieldName: The internal field name (e.g., "security_clearance")
 //   - fieldType: The field type (text, multiselect, or date)
-//   - store: KVStore interface for persisting field mapping
+//   - cache: FieldCache for persisting field mapping
 //
 // Returns:
 //   - The created PropertyField with its assigned ID
-//   - Error if field creation or KVStore save fails
+//   - Error if field creation or cache save fails
 func createPropertyField(
 	client *pluginapi.Client,
 	groupID string,
 	fieldName string,
 	fieldType model.PropertyFieldType,
-	store kvstore.KVStore,
+	cache FieldCache,
 ) (*model.PropertyField, error) {
 	// Build the PropertyField struct
 	field := &model.PropertyField{
@@ -77,10 +75,11 @@ func createPropertyField(
 		return nil, errors.Wrapf(err, "failed to create property field %s", fieldName)
 	}
 
-	// Save the field mapping to KVStore for future lookups
+	// Save the field mapping via FieldCache for future lookups
 	// Note: We use the original fieldName (not display name) as the key since that's
 	// what appears in the JSON data
-	if err := store.SaveFieldMapping(fieldName, createdField.ID); err != nil {
+	// The cache writes through to KVStore for persistence
+	if err := cache.SaveFieldMapping(fieldName, createdField.ID); err != nil {
 		// Log error but don't fail - field was created successfully
 		// The mapping can be recovered on next sync by querying existing fields
 		return createdField, errors.Wrapf(err, "field created but failed to save mapping for %s", fieldName)
@@ -263,7 +262,7 @@ func mergeOptions(existingOptions []map[string]interface{}, newValues []string) 
 // Orchestration flow:
 //  1. Discover all unique fields from user data (excluding "email")
 //  2. For each discovered field:
-//     a. Check if field already exists (lookup in KVStore)
+//     a. Check if field already exists (lookup via FieldCache)
 //     b. If new: infer type, create field, handle multiselect options
 //     c. If existing multiselect: extract and merge new options
 //  3. Return complete field name → ID mapping for value synchronization
@@ -279,10 +278,11 @@ func mergeOptions(existingOptions []map[string]interface{}, newValues []string) 
 // remaining fields. This prevents one problematic field from blocking the entire
 // sync. The field mapping returned will simply exclude the failed field.
 //
-// KVStore caching:
-// Field IDs are cached in KVStore to avoid redundant API calls. On first sync,
-// fields are created and mappings are saved. On subsequent syncs, we use cached
-// mappings and only update multiselect options if needed.
+// FieldCache usage:
+// Field IDs are cached via FieldCache to avoid redundant KVStore reads and provide
+// in-memory access during value sync. On first sync, fields are created and mappings
+// are saved. On subsequent syncs, we use cached mappings (lazy-loaded from KVStore)
+// and only update multiselect options if needed.
 //
 // Multiselect option handling:
 //   - New fields: Extract options from data, create field with options
@@ -292,7 +292,7 @@ func mergeOptions(existingOptions []map[string]interface{}, newValues []string) 
 //   - client: pluginapi.Client for Mattermost API access
 //   - groupID: Custom Profile Attributes group ID
 //   - users: User records containing field data
-//   - store: KVStore for field mapping persistence
+//   - cache: FieldCache for field mapping persistence and in-memory access
 //
 // Returns:
 //   - Map of field name → field ID for all successfully synced fields
@@ -301,7 +301,7 @@ func syncFields(
 	client *pluginapi.Client,
 	groupID string,
 	users []map[string]interface{},
-	store kvstore.KVStore,
+	cache FieldCache,
 ) (map[string]string, error) {
 	// Discover all fields from user data
 	discoveredFields := discoverFields(users)
@@ -311,11 +311,11 @@ func syncFields(
 
 	// Process each discovered field
 	for fieldName, sampleValue := range discoveredFields {
-		// Check if field already exists
-		existingFieldID, err := store.GetFieldMapping(fieldName)
+		// Check if field already exists (via cache, lazy-loads from KVStore if needed)
+		existingFieldID, err := cache.GetFieldID(fieldName)
 		if err != nil {
 			// Log error but continue - we'll try to create the field
-			client.Log.Warn("Failed to check field mapping from KVStore",
+			client.Log.Warn("Failed to check field mapping from cache",
 				"field", fieldName,
 				"error", err.Error(),
 			)
@@ -328,7 +328,7 @@ func syncFields(
 			// If it's a multiselect field, check if we need to add new options
 			fieldType := inferFieldType(sampleValue)
 			if fieldType == model.PropertyFieldTypeMultiselect {
-				if err = updateMultiselectOptions(client, groupID, existingFieldID, fieldName, users, store); err != nil {
+				if err = updateMultiselectOptions(client, groupID, existingFieldID, fieldName, users, cache); err != nil {
 					client.Log.Warn("Failed to update multiselect options",
 						"field", fieldName,
 						"error", err.Error(),
@@ -346,9 +346,9 @@ func syncFields(
 		// For multiselect fields, extract options before creation
 		var createdField *model.PropertyField
 		if fieldType == model.PropertyFieldTypeMultiselect {
-			createdField, err = createMultiselectFieldWithOptions(client, groupID, fieldName, users, store)
+			createdField, err = createMultiselectFieldWithOptions(client, groupID, fieldName, users, cache)
 		} else {
-			createdField, err = createPropertyField(client, groupID, fieldName, fieldType, store)
+			createdField, err = createPropertyField(client, groupID, fieldName, fieldType, cache)
 		}
 
 		if err != nil {
@@ -375,7 +375,7 @@ func createMultiselectFieldWithOptions(
 	groupID string,
 	fieldName string,
 	users []map[string]interface{},
-	store kvstore.KVStore,
+	cache FieldCache,
 ) (*model.PropertyField, error) {
 	// Extract all unique option values from user data
 	optionValues := extractMultiselectOptions(users, fieldName)
@@ -406,18 +406,18 @@ func createMultiselectFieldWithOptions(
 		return nil, errors.Wrapf(err, "failed to create multiselect field %s", fieldName)
 	}
 
-	// Save field mapping
-	if err := store.SaveFieldMapping(fieldName, createdField.ID); err != nil {
+	// Save field mapping via cache
+	if err := cache.SaveFieldMapping(fieldName, createdField.ID); err != nil {
 		return createdField, errors.Wrapf(err, "field created but failed to save mapping for %s", fieldName)
 	}
 
-	// Save initial options to KVStore for future merging
+	// Save initial options via cache for future merging
 	optionsMap := make(map[string]string)
 	for _, opt := range options {
 		optionsMap[opt["name"].(string)] = opt["id"].(string)
 	}
-	if err := store.SaveFieldOptions(fieldName, optionsMap); err != nil {
-		client.Log.Warn("Failed to save field options to KVStore",
+	if err := cache.SaveFieldOptions(fieldName, optionsMap); err != nil {
+		client.Log.Warn("Failed to save field options via cache",
 			"field", fieldName,
 			"error", err.Error(),
 		)
@@ -434,7 +434,7 @@ func updateMultiselectOptions(
 	fieldID string,
 	fieldName string,
 	users []map[string]interface{},
-	store kvstore.KVStore,
+	cache FieldCache,
 ) error {
 	// Extract current option values from user data
 	newOptionValues := extractMultiselectOptions(users, fieldName)
@@ -475,7 +475,7 @@ func updateMultiselectOptions(
 		return errors.Wrapf(err, "failed to update options for field %s", fieldName)
 	}
 
-	// Update KVStore with new options mapping
+	// Update cache with new options mapping
 	optionsMap := make(map[string]string)
 	for _, opt := range mergedOptions {
 		if name, nameOk := opt["name"].(string); nameOk {
@@ -484,8 +484,8 @@ func updateMultiselectOptions(
 			}
 		}
 	}
-	if err := store.SaveFieldOptions(fieldName, optionsMap); err != nil {
-		client.Log.Warn("Failed to save updated field options to KVStore",
+	if err := cache.SaveFieldOptions(fieldName, optionsMap); err != nil {
+		client.Log.Warn("Failed to save updated field options via cache",
 			"field", fieldName,
 			"error", err.Error(),
 		)

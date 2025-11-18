@@ -195,3 +195,142 @@ func TestDatePatternRegex(t *testing.T) {
 		})
 	}
 }
+
+func TestToDisplayName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Snake case transformations
+		{
+			name:     "snake_case with two words",
+			input:    "security_clearance",
+			expected: "Security Clearance",
+		},
+		{
+			name:     "snake_case with three words",
+			input:    "user_access_level",
+			expected: "User Access Level",
+		},
+		{
+			name:     "snake_case with many words",
+			input:    "very_long_field_name_example",
+			expected: "Very Long Field Name Example",
+		},
+
+		// Kebab case transformations
+		{
+			name:     "kebab-case with two words",
+			input:    "start-date",
+			expected: "Start Date",
+		},
+		{
+			name:     "kebab-case with three words",
+			input:    "end-of-service",
+			expected: "End Of Service",
+		},
+
+		// Mixed separators
+		{
+			name:     "mixed underscores and hyphens",
+			input:    "user_id-code",
+			expected: "User Id Code",
+		},
+
+		// Single word (no transformation needed)
+		{
+			name:     "single lowercase word",
+			input:    "department",
+			expected: "Department",
+		},
+		{
+			name:     "single uppercase word",
+			input:    "DEPARTMENT",
+			expected: "DEPARTMENT",
+		},
+		{
+			name:     "single mixed case word",
+			input:    "Department",
+			expected: "Department",
+		},
+
+		// Already title case
+		{
+			name:     "already title case with spaces",
+			input:    "Security Clearance",
+			expected: "Security Clearance",
+		},
+
+		// Edge cases
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only underscores",
+			input:    "___",
+			expected: "",
+		},
+		{
+			name:     "only hyphens",
+			input:    "---",
+			expected: "",
+		},
+		{
+			name:     "leading underscore",
+			input:    "_field_name",
+			expected: "Field Name",
+		},
+		{
+			name:     "trailing underscore",
+			input:    "field_name_",
+			expected: "Field Name",
+		},
+		{
+			name:     "multiple consecutive separators",
+			input:    "field__name",
+			expected: "Field Name",
+		},
+		{
+			name:     "single character words",
+			input:    "a_b_c",
+			expected: "A B C",
+		},
+
+		// Common field names
+		{
+			name:     "email field",
+			input:    "email",
+			expected: "Email",
+		},
+		{
+			name:     "user_id field",
+			input:    "user_id",
+			expected: "User Id",
+		},
+		{
+			name:     "created_at field",
+			input:    "created_at",
+			expected: "Created At",
+		},
+		{
+			name:     "location field",
+			input:    "location",
+			expected: "Location",
+		},
+		{
+			name:     "programs field",
+			input:    "programs",
+			expected: "Programs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := toDisplayName(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

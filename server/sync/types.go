@@ -2,6 +2,8 @@ package sync
 
 import (
 	"regexp"
+	"strings"
+	"unicode"
 
 	"github.com/mattermost/mattermost/server/public/model"
 )
@@ -67,4 +69,57 @@ func inferFieldType(value interface{}) model.PropertyFieldType {
 		// These would need to be converted to strings when setting values
 		return model.PropertyFieldTypeText
 	}
+}
+
+// toDisplayName converts a field name from snake_case or kebab-case to Title Case
+// for user-friendly display in the Mattermost UI.
+//
+// Transformation rules:
+//   - Split on underscores (_) and hyphens (-)
+//   - Capitalize the first letter of each word
+//   - Join words with spaces
+//
+// Examples:
+//   - "security_clearance" → "Security Clearance"
+//   - "start-date" → "Start Date"
+//   - "department" → "Department"
+//   - "user_id" → "User Id"
+//
+// Why this transformation:
+// External systems often use snake_case or kebab-case for field names (e.g., LDAP
+// attributes, JSON API fields, database columns). While these naming conventions
+// are programmer-friendly, they're not ideal for display in a UI. This function
+// provides automatic conversion to human-readable display names.
+//
+// The internal field name (the key in the JSON data) is preserved and used for
+// all lookups. Only the display name shown to users is transformed.
+//
+// Parameters:
+//   - name: The field name to transform (typically from JSON keys)
+//
+// Returns:
+//   - The transformed display name in Title Case with spaces
+func toDisplayName(name string) string {
+	// Handle empty string
+	if name == "" {
+		return ""
+	}
+
+	// Split on underscores and hyphens
+	words := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '_' || r == '-'
+	})
+
+	// Capitalize first letter of each word
+	for i, word := range words {
+		if word != "" {
+			// Convert to runes to properly handle Unicode
+			runes := []rune(word)
+			runes[0] = unicode.ToUpper(runes[0])
+			words[i] = string(runes)
+		}
+	}
+
+	// Join with spaces
+	return strings.Join(words, " ")
 }

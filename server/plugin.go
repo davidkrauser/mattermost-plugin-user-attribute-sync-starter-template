@@ -3,7 +3,6 @@ package main
 import (
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -45,14 +44,19 @@ func (p *Plugin) OnActivate() error {
 
 	p.commandClient = command.NewCommandHandler(p.client)
 
+	// Set up the attribute sync cluster job
+	// This job runs periodically to synchronize user attributes from external sources
+	// to Mattermost Custom Profile Attributes. Using cluster.Schedule ensures only
+	// one server instance runs the job in multi-server deployments (automatic
+	// leader election and failover).
 	job, err := cluster.Schedule(
 		p.API,
-		"BackgroundJob",
-		cluster.MakeWaitForRoundedInterval(1*time.Hour),
-		p.runJob,
+		"AttributeSync",
+		p.nextWaitInterval,
+		p.runSync,
 	)
 	if err != nil {
-		return errors.Wrap(err, "failed to schedule background job")
+		return errors.Wrap(err, "failed to schedule attribute sync job")
 	}
 
 	p.backgroundJob = job
@@ -61,10 +65,11 @@ func (p *Plugin) OnActivate() error {
 }
 
 // OnDeactivate is invoked when the plugin is deactivated.
+// Cleans up the attribute sync cluster job to prevent orphaned jobs.
 func (p *Plugin) OnDeactivate() error {
 	if p.backgroundJob != nil {
 		if err := p.backgroundJob.Close(); err != nil {
-			p.API.LogError("Failed to close background job", "err", err)
+			p.API.LogError("Failed to close attribute sync job", "err", err)
 		}
 	}
 	return nil

@@ -5,12 +5,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mattermost/mattermost-plugin-starter-template/server/command"
-	"github.com/mattermost/mattermost-plugin-starter-template/server/store/kvstore"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
+	"github.com/mattermost/user-attribute-sync-starter-template/server/command"
+	"github.com/mattermost/user-attribute-sync-starter-template/server/store/kvstore"
 	"github.com/pkg/errors"
 )
 

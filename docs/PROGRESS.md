@@ -548,45 +548,56 @@ After completing all sub-phases in a phase:
 ## Phase 4: Value Synchronization
 
 ### 4.0 - Field Cache Implementation
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `4950e5c`
+**Refactoring Commit:** `11474d6` (updated syncFields to use FieldCache)
 
-**Code Changes (~120 lines):**
-- Create `server/sync/field_cache.go`
-- Define `FieldCache` interface:
-  - `GetFieldID(fieldName string) (string, error)`
-  - `GetOptionID(fieldName, optionName string) (string, error)`
-  - `SaveFieldMapping(fieldName, fieldID string) error`
-  - `SaveFieldOptions(fieldName string, options map[string]string) error`
-  - `Load() error` - Eager-loads all mappings/options from KVStore
-- Implement `fieldCacheImpl` struct:
-  - `store *kvstore.Client`
-  - `fieldMappings map[string]string` - in-memory cache
-  - `fieldOptions map[string]map[string]string` - in-memory cache
-- Implement constructor `NewFieldCache(store *kvstore.Client) FieldCache`
-- Implement write-through caching (updates both memory and KVStore)
+**Code Changes (~173 lines - actual):**
+- Created `server/sync/field_cache.go`
+- Defined `FieldCache` interface:
+  - `GetFieldID(fieldName string) (string, error)` - lazy-load field mapping
+  - `GetOptionID(fieldName, optionName string) (string, error)` - lazy-load option mapping
+  - `SaveFieldMapping(fieldName, fieldID string) error` - write-through to cache and KVStore
+  - `SaveFieldOptions(fieldName string, options map[string]string) error` - write-through
+  - **Note:** Removed `Load()` method - cache uses lazy-loading instead of eager-loading
+- Implemented `fieldCacheImpl` struct:
+  - `store kvstore.KVStore` - backing storage
+  - `fieldMappings map[string]string` - in-memory cache for field name → ID
+  - `fieldOptions map[string]map[string]string` - in-memory cache for option mappings
+- Implemented constructor `NewFieldCache(store kvstore.KVStore) FieldCache`
+- Implemented lazy-loading read-through caching strategy
+- Implemented write-through caching (updates both memory and KVStore)
 
-**Unit Tests (~100 lines):**
-- Test Load() populates cache from KVStore
-- Test GetFieldID() with cached and uncached values
+**Design Decision - Lazy Loading:**
+Changed from eager-loading to lazy-loading because KVStore doesn't support "list all keys" operation. With lazy-loading:
+- First lookup: Fetches from KVStore and caches result
+- Subsequent lookups: Returns cached value instantly
+- Result: Each unique field/option loaded exactly once per sync
+
+**Unit Tests (~357 lines - actual):**
+- Test GetFieldID() with cache hit and cache miss
+- Test GetFieldID() caches empty results (prevents repeated lookups)
 - Test GetOptionID() with nested lookups
+- Test GetOptionID() caches entire field's options on first access
 - Test SaveFieldMapping() updates both cache and KVStore
 - Test SaveFieldOptions() updates both cache and KVStore
-- Test error handling (KVStore failures)
-- Mock KVStore
+- Test deep copy in SaveFieldOptions() prevents external modifications
+- Test error handling for KVStore failures
+- Test integration scenario (field sync → value sync with cache)
+- Mock KVStore interface
 
 **Verification:**
-- `make test`
-- `make check-style`
+- ✅ `make test` - All 166 tests pass
+- ✅ `make check-style` - Passes
 
-**Commit Message Guidance:**
-- Explain WHY in-memory cache is needed (performance optimization for value sync)
-- Reference the performance problem: 100 users × 5 attributes = 500+ KVStore reads without cache
-- Mention per-sync lifecycle ensures cache freshness
-- Explain write-through strategy maintains KVStore consistency
-- Note interface design enables future extensions by plugin developers
-
-**Impact on Phase 3.7:**
-After Phase 4.0 is complete, Phase 3.7's `syncFields()` function will be refactored to accept `FieldCache` instead of `*kvstore.Client`. This refactoring will be done in Phase 4.0 as part of the same commit, ensuring all code uses the cache consistently.
+**Refactoring Impact (commit 11474d6):**
+Updated all field sync code to use FieldCache instead of KVStore directly:
+- Modified `syncFields()` signature to accept `FieldCache` instead of `kvstore.KVStore`
+- Modified `createPropertyField()` to use FieldCache for saving mappings
+- Modified `createMultiselectFieldWithOptions()` to use FieldCache
+- Modified `updateMultiselectOptions()` to use FieldCache
+- Updated all test mocks from `mockKVStore` to `mockFieldCache`
+- Removed kvstore import from field_sync.go
 
 ---
 

@@ -847,17 +847,20 @@ Without cache (direct KVStore access):
   - If 2 attributes are multiselect with 3 options average = 600 option ID lookups
   - Total: 1,100 KVStore reads per sync
 
-With FieldCache (in-memory):
-  - Initial load: ~5-10 KVStore reads (all fields and their options)
-  - During sync: 1,100 in-memory lookups (virtually instant)
-  - Performance improvement: 100x+ faster
+With FieldCache (lazy-loading):
+  - First access per field: KVStore read + cache (5 unique fields = 5 reads)
+  - Subsequent accesses: In-memory lookup (495 cache hits = 0 reads)
+  - First access per field's options: KVStore read + cache (2 multiselect fields = 2 reads)
+  - Subsequent option lookups: In-memory lookup (598 cache hits = 0 reads)
+  - Total: ~7 KVStore reads instead of 1,100
+  - Performance improvement: ~150x faster
 ```
 
 **Design Characteristics:**
 
 1. **Per-Sync Lifecycle**: Cache is created at the start of each sync run and discarded when complete. This ensures the cache is always fresh and eliminates staleness concerns.
 
-2. **Eager Loading**: Cache loads all field mappings and options from KVStore during initialization, providing fast lookups throughout the sync.
+2. **Lazy Loading (Read-Through)**: Cache loads field mappings and options from KVStore on first access. Each unique field/option is loaded exactly once, then cached for subsequent lookups. This approach was chosen because KVStore doesn't provide a "list all keys" operation for eager loading.
 
 3. **Write-Through**: When new fields or options are created, the cache updates both its in-memory state and the underlying KVStore, keeping them synchronized.
 
@@ -883,17 +886,18 @@ type FieldCache interface {
 **Usage Pattern:**
 ```go
 // In runSync():
+// Create cache (empty, will lazy-load on first access)
 cache := NewFieldCache(p.kvstore)
-if err := cache.Load(); err != nil {
-    return errors.Wrap(err, "failed to load field cache")
-}
 
 // Pass cache to all sync functions
+// syncFields populates the cache via SaveFieldMapping/SaveFieldOptions
 fieldMappings, err := syncFields(p.client, groupID, users, cache)
 if err != nil {
     return errors.Wrap(err, "failed to sync fields")
 }
 
+// syncUsers reads from the cache via GetFieldID/GetOptionID
+// Cache will lazy-load any fields not already in memory
 err = syncUsers(p.client, groupID, users, fieldMappings, cache)
 if err != nil {
     return errors.Wrap(err, "failed to sync users")

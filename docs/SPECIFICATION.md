@@ -1240,10 +1240,11 @@ func (f *FileProvider) GetUserAttributes() ([]map[string]interface{}, error) {
 
 **File Structure:**
 ```
-assets/
-├── user_attributes.json          # User data
-└── user_attributes_metadata.json # Modification tracking
+data/
+└── user_attributes.json          # User data
 ```
+
+**Note:** The implementation uses `os.Stat()` to check file modification time directly, eliminating the need for a separate metadata file.
 
 **Metadata Format:**
 ```json
@@ -1454,7 +1455,7 @@ This appendix provides example data formats for the file-based AttributeProvider
 
 The file-based provider expects a JSON file with an array of user objects. Each object represents a user and their attributes.
 
-**File Location:** `assets/user_attributes.json` or configurable path
+**File Location:** `data/user_attributes.json` (hardcoded in template)
 
 **Schema:**
 ```json
@@ -1530,26 +1531,25 @@ The file-based provider expects a JSON file with an array of user objects. Each 
 4. **Empty arrays are valid** - `"security_clearance": []` clears multiselect value
 5. **New fields auto-create** - Any new field names automatically create PropertyFields
 
-#### A.2 Incremental Sync Metadata
+#### A.2 Incremental Sync Approach
 
-The file-based provider tracks when data was last modified to support incremental sync.
+The file-based provider uses `os.Stat()` to track file modification time for incremental sync. This approach is simpler than maintaining a separate metadata file.
 
-**Metadata File Location:** `assets/user_attributes_metadata.json`
+**Implementation:**
+- FileProvider tracks `lastModTime` internally
+- On each sync, calls `os.Stat()` to get current file modification time
+- If file modification time > lastModTime:
+  - Reads and returns user data
+  - Updates lastModTime to current file modification time
+- If file unchanged:
+  - Returns empty array (signals no sync needed)
+  - No file I/O performed
 
-**Schema:**
-```json
-{
-  "last_modified": "2025-01-17T10:30:00Z",
-  "user_count": 150,
-  "change_count": 15
-}
-```
-
-**Usage:**
-- Plugin passes last sync timestamp to provider
-- Provider reads metadata to determine if file has changed
-- If `last_modified` > last sync timestamp, reads and returns user data
-- If no changes, returns empty array
+**Benefits:**
+- No separate metadata file to maintain
+- File system provides modification time automatically
+- Simpler architecture with fewer moving parts
+- Reliable detection of file changes
 
 #### A.3 Example Test Data
 

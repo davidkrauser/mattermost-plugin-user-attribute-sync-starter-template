@@ -4,11 +4,17 @@ This document tracks the implementation progress of the User Attribute Sync Star
 
 ## Implementation Approach
 
-Each sub-phase follows this pattern:
+**Each sub-phase is implemented as a separate commit** with this pattern:
 1. **Code changes** - Production code modifications
 2. **Unit tests** - Tests for those changes (if applicable)
 3. **Verification** - Run `make test` and `make check-style`
 4. **Commit** - Single commit with detailed explanation of WHY the changes were made, including Claude attribution
+
+**Important:** Commit messages should NOT reference the specification or progress documents. These documents may change or be removed in the future. Instead, commit messages should:
+- Explain the problem being solved
+- Explain why this approach was chosen
+- Describe key design decisions made in the implementation
+- Stand alone as documentation of the change
 
 After completing all sub-phases in a phase:
 5. **Update documentation** - Update SPECIFICATION.md and PROGRESS.md with implementation details
@@ -174,18 +180,19 @@ After completing all sub-phases in a phase:
 ## Phase 2: Data Source Abstraction
 
 ### 2.1 - AttributeProvider Interface
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `ef4f389`
 
-**Code Changes (~20 lines):**
-- Create `server/sync/provider.go`
-- Define `AttributeProvider` interface:
-  ```go
-  type AttributeProvider interface {
-      GetUserAttributes() ([]map[string]interface{}, error)
-      Close() error
-  }
-  ```
-- Add comprehensive godoc comments explaining contract
+**Code Changes (~37 lines - actual):**
+- Created `server/sync/provider.go`
+- Defined `AttributeProvider` interface with two methods:
+  - `GetUserAttributes() ([]map[string]interface{}, error)`
+  - `Close() error`
+- Added comprehensive godoc comments explaining:
+  - Stateless design from caller's perspective
+  - Provider tracks internal state for incremental sync
+  - Expected return format with example
+  - Empty array return when no changes detected
 
 **Unit Tests:**
 - No tests needed (interface definition)
@@ -193,73 +200,78 @@ After completing all sub-phases in a phase:
 **Verification:**
 - `make check-style`
 
-**Commit Message Guidance:**
-- Explain WHY interface abstraction (swappable data sources)
-- Reference spec section 4.5 design benefits
-- Mention stateless design where provider tracks internal state
-
 ---
 
 ### 2.2 - File Provider Implementation
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `e0bde9f`
 
-**Code Changes (~90 lines):**
-- Create `server/sync/file_provider.go`
-- **Hardcode file path: `const defaultDataFilePath = "assets/user_attributes.json"`**
-- Define `FileProvider` struct with fields:
+**Code Changes (~73 lines - actual):**
+- Created `server/sync/file_provider.go`
+- **Changed file path to: `const defaultDataFilePath = "data/user_attributes.json"`**
+  - Used `data/` directory instead of `assets/` (more semantically accurate)
+- Defined `FileProvider` struct with fields:
   - `filePath string`
   - `lastReadTime time.Time`
   - `lastModTime time.Time`
-- Implement `NewFileProvider() *FileProvider` (no params, uses const)
-- Implement `GetUserAttributes()`:
-  - Use `os.Stat()` to get file modification time
-  - If file mod time <= lastModTime, return empty array (no changes)
-  - Read and parse JSON file
-  - Update `lastReadTime` and `lastModTime`
-  - Return parsed user objects
-- Implement `Close() error` (no-op)
+- Implemented `NewFileProvider() *FileProvider` (no params, uses const)
+- Implemented `GetUserAttributes()`:
+  - Uses `os.Stat()` to get file modification time
+  - If file mod time <= lastModTime, returns empty array (no changes)
+  - Reads and parses JSON file
+  - Updates `lastReadTime` and `lastModTime`
+  - Returns parsed user objects
+- Implemented `Close() error` (no-op)
 
-**Unit Tests (~100 lines):**
-- Test first sync returns all users
-- Test subsequent sync with unchanged file returns empty array
-- Test subsequent sync after file modification returns users
-- Test file not found error
-- Test invalid JSON error
-- Mock file system operations using test files
+**Unit Tests (~180 lines - actual):**
+- Created `server/sync/file_provider_test.go`
+- Test coverage:
+  - First sync returns all users
+  - Subsequent sync with unchanged file returns empty array
+  - Subsequent sync after file modification returns users
+  - File not found error handling
+  - Invalid JSON error handling
+  - Empty file handling
+  - Close() method
+  - Constructor default values
+- Helper function `writeJSONFile()` creates temp directories and files
+  - Returns both file path and directory path for test convenience
 
 **Verification:**
-- `make test`
-- `make check-style`
-
-**Commit Message Guidance:**
-- Explain WHY file-based provider with os.Stat() (simple, no metadata file needed)
-- Reference spec section 4.5.2 but note simplification
-- Mention this is the reference implementation developers learn from
-- Note hardcoded path keeps template simple
+- `make test` - all tests pass (28 tests)
+- `make check-style` - passes
 
 ---
 
 ### 2.3 - Example Data File
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `be58c2b`
 
-**Code Changes (~0 lines, but create file):**
-- Create `assets/user_attributes.json` with 3-5 example users
-- Include different field types (text, multiselect, date):
+**Code Changes (~23 lines - actual):**
+- Created `data/user_attributes.json` with 3 example users
+- Includes all field types (text, multiselect, date):
   ```json
   [
     {
       "email": "john.doe@example.com",
       "department": "Engineering",
       "location": "US-East",
-      "security_clearance": ["Level2", "Level3"],
+      "programs": ["Apples", "Oranges"],
       "start_date": "2023-01-15"
     },
     {
       "email": "jane.smith@example.com",
       "department": "Sales",
       "location": "US-West",
-      "security_clearance": ["Level1"],
+      "programs": ["Lemons"],
       "start_date": "2022-08-01"
+    },
+    {
+      "email": "bob.wilson@example.com",
+      "department": "Engineering",
+      "location": "EU-Central",
+      "programs": ["Apples", "Lemons"],
+      "start_date": "2024-03-20"
     }
   ]
   ```
@@ -268,13 +280,26 @@ After completing all sub-phases in a phase:
 - None (data file)
 
 **Verification:**
-- Visual inspection of JSON validity
-- Can manually run `jq . assets/user_attributes.json` to validate
+- JSON validated with `jq . data/user_attributes.json`
 
-**Commit Message Guidance:**
-- Explain WHY example data is crucial (developers need working examples)
-- Reference spec Appendix A
-- Mention examples demonstrate all supported field types
+---
+
+### Phase 2 Summary
+
+**Status:** ✅ Complete
+
+**Total Commits:** 3
+- Phase 2.1: Add AttributeProvider interface
+- Phase 2.2: Implement FileProvider with incremental sync
+- Phase 2.3: Add example data file
+
+**Key Design Decisions:**
+1. **Changed directory name** - Used `data/` instead of `assets/` for semantic clarity (data can change vs static assets)
+2. **os.Stat()-based incremental sync** - No separate metadata file needed; tracks modification time directly
+3. **Stateless abstraction** - Provider implementations manage their own state internally
+4. **Helper function returns both paths** - Test helper returns file path and directory path for test convenience
+
+**Ready for Phase 3:** Field Management
 
 ---
 

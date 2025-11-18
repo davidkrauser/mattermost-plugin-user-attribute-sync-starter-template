@@ -49,7 +49,7 @@ The detailed implementation plan broken into 22 phases. Each phase includes:
 
 ## Implementation Workflow
 
-When working on a phase:
+**Each sub-phase is implemented as a separate commit.** When working on a sub-phase:
 
 1. **Read the phase in PROGRESS.md** to understand scope and requirements
 2. **Reference SPECIFICATION.md** for architectural context and design decisions
@@ -62,8 +62,11 @@ When working on a phase:
    ```
 6. **Commit** with a detailed message explaining WHY:
    - What problem does this solve?
-   - Why this approach?
-   - Reference spec sections if relevant
+   - Why this approach was chosen?
+   - Key design decisions made in the implementation
+   - **IMPORTANT:** Do NOT reference SPECIFICATION.md or PROGRESS.md in commit messages
+     - These documents may change or be removed in the future
+     - Commit messages should stand alone as documentation of the change
    - Include Claude attribution:
      ```
      🤖 Generated with Claude Code
@@ -75,7 +78,7 @@ When working on a phase:
 
 **Hardcoded Values (No Configuration):**
 - Sync interval: 60 minutes
-- File path: `assets/user_attributes.json`
+- File path: `data/user_attributes.json`
 - Rationale: Keeps template simple; developers modify as needed for their use case
 
 **No Metadata File:**

@@ -88,3 +88,86 @@ func createPropertyField(
 
 	return createdField, nil
 }
+
+// extractMultiselectOptions collects all unique option values for a multiselect field
+// by examining the field's values across all user records.
+//
+// This function is used to build the complete set of options that need to exist for
+// a multiselect field. It handles the data structure from JSON unmarshaling where
+// multiselect values are represented as arrays.
+//
+// Extraction process:
+//  1. Iterate through all user records
+//  2. For each user, check if they have the specified field
+//  3. If the field value is an array, extract each element as an option name
+//  4. Deduplicate options using a set (each unique value appears once)
+//  5. Return sorted list for consistency
+//
+// Why deduplication:
+// Multiple users may have the same option values (e.g., multiple users in
+// "Engineering" department). We only need to create each unique option once
+// in the field definition.
+//
+// Why extract from all users:
+// Unlike field discovery which only needs one sample value, option extraction
+// must examine ALL users to find ALL possible option values. For example:
+//   - User A: programs: ["Alpha", "Beta"]
+//   - User B: programs: ["Beta", "Gamma"]
+//   - Result: ["Alpha", "Beta", "Gamma"]
+//
+// Array value handling:
+// JSON unmarshaling produces []interface{} for arrays. Each element needs to
+// be type-asserted to string. Non-string elements are skipped since multiselect
+// options must be strings.
+//
+// Parameters:
+//   - users: Array of user records to examine
+//   - fieldName: The field name to extract options from
+//
+// Returns:
+//   - Slice of unique option names (strings) found across all users
+func extractMultiselectOptions(users []map[string]interface{}, fieldName string) []string {
+	// Use a set (map with empty struct values) for deduplication
+	optionsSet := make(map[string]struct{})
+
+	// Scan all users
+	for _, user := range users {
+		value, exists := user[fieldName]
+		if !exists {
+			continue
+		}
+
+		// Check if value is an array
+		arrayValue, ok := value.([]interface{})
+		if !ok {
+			// Not an array - skip this user's value
+			continue
+		}
+
+		// Extract each option from the array
+		for _, item := range arrayValue {
+			// Options must be strings
+			optionName, ok := item.(string)
+			if !ok {
+				// Skip non-string values
+				continue
+			}
+
+			// Skip empty strings
+			if optionName == "" {
+				continue
+			}
+
+			// Add to set
+			optionsSet[optionName] = struct{}{}
+		}
+	}
+
+	// Convert set to slice for return
+	options := make([]string, 0, len(optionsSet))
+	for option := range optionsSet {
+		options = append(options, option)
+	}
+
+	return options
+}

@@ -294,3 +294,191 @@ func TestCreatePropertyField(t *testing.T) {
 		store.AssertExpectations(t)
 	})
 }
+
+func TestExtractMultiselectOptions(t *testing.T) {
+	t.Run("extracts options from single user", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user@example.com",
+				"programs": []interface{}{"Alpha", "Beta"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 2)
+		assert.Contains(t, options, "Alpha")
+		assert.Contains(t, options, "Beta")
+	})
+
+	t.Run("extracts and deduplicates options from multiple users", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user1@example.com",
+				"programs": []interface{}{"Alpha", "Beta"},
+			},
+			{
+				"email":    "user2@example.com",
+				"programs": []interface{}{"Beta", "Gamma"},
+			},
+			{
+				"email":    "user3@example.com",
+				"programs": []interface{}{"Alpha", "Delta"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 4, "Should have 4 unique options")
+		assert.Contains(t, options, "Alpha")
+		assert.Contains(t, options, "Beta")
+		assert.Contains(t, options, "Gamma")
+		assert.Contains(t, options, "Delta")
+	})
+
+	t.Run("handles users without the field", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user1@example.com",
+				"programs": []interface{}{"Alpha"},
+			},
+			{
+				"email":      "user2@example.com",
+				"department": "Engineering", // Different field
+			},
+			{
+				"email":    "user3@example.com",
+				"programs": []interface{}{"Beta"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 2)
+		assert.Contains(t, options, "Alpha")
+		assert.Contains(t, options, "Beta")
+	})
+
+	t.Run("handles empty arrays", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user1@example.com",
+				"programs": []interface{}{},
+			},
+			{
+				"email":    "user2@example.com",
+				"programs": []interface{}{"Alpha"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 1)
+		assert.Contains(t, options, "Alpha")
+	})
+
+	t.Run("skips non-array values", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user1@example.com",
+				"programs": "not an array", // Wrong type
+			},
+			{
+				"email":    "user2@example.com",
+				"programs": []interface{}{"Alpha"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 1)
+		assert.Contains(t, options, "Alpha")
+	})
+
+	t.Run("skips non-string array elements", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user@example.com",
+				"programs": []interface{}{"Alpha", 123, "Beta", nil, "Gamma"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 3, "Should only include string values")
+		assert.Contains(t, options, "Alpha")
+		assert.Contains(t, options, "Beta")
+		assert.Contains(t, options, "Gamma")
+		assert.NotContains(t, options, 123)
+		assert.NotContains(t, options, nil)
+	})
+
+	t.Run("skips empty strings", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user@example.com",
+				"programs": []interface{}{"Alpha", "", "Beta", ""},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 2, "Should skip empty strings")
+		assert.Contains(t, options, "Alpha")
+		assert.Contains(t, options, "Beta")
+	})
+
+	t.Run("returns empty slice for empty users array", func(t *testing.T) {
+		users := []map[string]interface{}{}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Empty(t, options)
+	})
+
+	t.Run("returns empty slice when no users have the field", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":      "user1@example.com",
+				"department": "Engineering",
+			},
+			{
+				"email":    "user2@example.com",
+				"location": "US-East",
+			},
+		}
+
+		options := extractMultiselectOptions(users, "nonexistent_field")
+
+		assert.Empty(t, options)
+	})
+
+	t.Run("deduplicates duplicate values within single user", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user@example.com",
+				"programs": []interface{}{"Alpha", "Beta", "Alpha", "Beta"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 2, "Should deduplicate within single user")
+		assert.Contains(t, options, "Alpha")
+		assert.Contains(t, options, "Beta")
+	})
+
+	t.Run("handles single option", func(t *testing.T) {
+		users := []map[string]interface{}{
+			{
+				"email":    "user@example.com",
+				"programs": []interface{}{"Alpha"},
+			},
+		}
+
+		options := extractMultiselectOptions(users, "programs")
+
+		assert.Len(t, options, 1)
+		assert.Equal(t, "Alpha", options[0])
+	})
+}

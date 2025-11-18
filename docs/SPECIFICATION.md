@@ -622,6 +622,22 @@ Demonstrate patterns that work with:
 - Server-only plugin (no webapp component)
 - Limited to Custom Profile Attributes property group
 
+**Supported Field Types:**
+
+Mattermost Custom Profile Attributes supports 6 field types, but this template implements only 3 of them:
+
+**Supported Types:**
+- `text` - Simple text fields for string values (department, location, etc.)
+- `multiselect` - Multiple choice selections with predefined options (programs, roles, etc.)
+- `date` - Date fields in YYYY-MM-DD format (start_date, expiration_date, etc.)
+
+**Not Supported (and Why):**
+- `select` - Single choice dropdown. **Not needed:** The template always uses `multiselect` instead. If external data has a single value, multiselect handles it naturally by having one selected option. This simplifies the implementation without losing functionality.
+- `user` - Reference to a single Mattermost user by ID. **Not needed for this use case:** This template syncs attributes *about* users, not references *between* users. User reference fields are typically for relationships (manager, mentor, etc.), which is outside the scope of external attribute synchronization.
+- `multiuser` - References to multiple Mattermost users by ID. **Same rationale as `user`:** Not applicable for syncing user attributes from external systems.
+
+**Design Decision:** Supporting only text, multiselect, and date covers the vast majority of external attribute synchronization use cases (HR data, directory attributes, security clearances, etc.) while keeping the template simple and focused. Developers needing user reference fields can extend the template by adding type inference logic for those types.
+
 **Operational Constraints:**
 - Sync frequency limited by external system capabilities
 - User count limited by practical sync duration requirements

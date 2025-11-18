@@ -655,10 +655,11 @@ Demonstrate patterns that work with:
 - Custom Profile Attributes feature enabled
 
 **Go Modules:**
-- `github.com/mattermost/mattermost/server/public/plugin` - Plugin API
-- `github.com/mattermost/mattermost/server/public/pluginapi` - Helper APIs
-- `github.com/mattermost/mattermost/server/public/pluginapi/cluster` - Cluster jobs
-- `github.com/mattermost/mattermost/server/public/model` - Data models
+- `github.com/mattermost/mattermost/server/public` v0.1.21 or higher
+  - `plugin` - Plugin API
+  - `pluginapi` - Helper APIs (includes PropertyService)
+  - `pluginapi/cluster` - Cluster jobs
+  - `model` - Data models
 
 **No External Dependencies:**
 - Template uses only Mattermost APIs and Go standard library
@@ -874,8 +875,11 @@ job, err := cluster.Schedule(
 **Benefits:**
 - **Cluster-Aware**: Only one server instance runs the job, preventing duplicate work
 - **Leader Election**: Automatic failover if the running instance fails
-- **Configurable Interval**: Adjusts based on plugin configuration
+- **Configurable Interval**: Adjusts based on plugin configuration (hardcoded to 60 minutes in this template)
 - **Clean Lifecycle**: Proper start/stop on plugin activation/deactivation
+
+**Implementation Note:**
+The actual cluster job API uses `metadata.LastFinished` (not `LastFinishedAt`) to track the last completion time. The `nextWaitInterval` function calculates the next run based on this timestamp and the configured interval.
 
 #### Sync Execution Flow
 
@@ -1988,7 +1992,7 @@ func (p *Plugin) OnConfigurationChange() error {
 key: "field_mapping_department"
 value: "field_abc123xyz"
 
-// Accumulated options per field
+// Accumulated options per field (stored as JSON internally)
 key: "field_options_security_clearance"
 value: `{"Level1":"opt_123","Level2":"opt_456","Level3":"opt_789"}`
 
@@ -2003,8 +2007,21 @@ value: `{"users_synced":150,"fields_created":5,"duration_seconds":3.2}`
 
 **Key Insights:**
 - KVStore is reliable and survives plugin restarts
-- Serialize complex data as JSON strings
+- Serialize complex data as JSON strings internally
 - Use namespaced keys to avoid conflicts
+
+**Implementation Note:**
+The actual KVStore interface exposes type-safe methods rather than raw JSON strings:
+```go
+// Type-safe interface (implementation handles JSON marshaling internally)
+SaveFieldOptions(fieldName string, options map[string]string) error
+GetFieldOptions(fieldName string) (map[string]string, error)
+```
+
+This design provides:
+- Type safety at API boundaries
+- Single responsibility - callers work with Go types, KVStore handles serialization
+- Cleaner code in sync logic without repeated JSON marshaling/unmarshaling
 
 #### C.9 Logging Best Practices
 

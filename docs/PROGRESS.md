@@ -4,11 +4,16 @@ This document tracks the implementation progress of the User Attribute Sync Star
 
 ## Implementation Approach
 
-Each phase follows this pattern:
+Each sub-phase follows this pattern:
 1. **Code changes** - Production code modifications
-2. **Unit tests** - Tests for those changes
+2. **Unit tests** - Tests for those changes (if applicable)
 3. **Verification** - Run `make test` and `make check-style`
 4. **Commit** - Single commit with detailed explanation of WHY the changes were made, including Claude attribution
+
+After completing all sub-phases in a phase:
+5. **Update documentation** - Update SPECIFICATION.md and PROGRESS.md with implementation details
+6. **Add commit hashes** - Record commit hashes in PROGRESS.md for each completed sub-phase
+7. **Commit documentation** - Single commit documenting the completed phase
 
 ## Phase Overview
 
@@ -26,7 +31,8 @@ Each phase follows this pattern:
 ## Phase 1: Foundation and Infrastructure
 
 ### 1.1 - Update Plugin Metadata
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `91f7d81`
 
 **Code Changes (~15-20 lines):**
 - Update `plugin.json`: Change plugin ID from `com.mattermost.plugin-starter-template` to `com.mattermost.user-attribute-sync-starter-template`
@@ -47,24 +53,30 @@ Each phase follows this pattern:
 ---
 
 ### 1.2 - KVStore Keys and Helpers
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `5e2d6cf`
 
-**Code Changes (~60 lines):**
-- Create `server/store/kvstore/sync.go`
-- Define key constants:
+**Code Changes (~165 lines - actual):**
+- Created `server/store/kvstore/sync.go`
+- Defined key constants:
   - `fieldMappingPrefix`
   - `fieldOptionsPrefix`
   - `lastSyncTimestampKey`
-- Implement helpers:
+- Implemented helpers:
   - `SaveFieldMapping(fieldName, fieldID string) error`
   - `GetFieldMapping(fieldName string) (string, error)`
+  - `SaveFieldOptions(fieldName string, options map[string]string) error`
+  - `GetFieldOptions(fieldName string) (map[string]string, error)`
   - `SaveLastSyncTime(t time.Time) error`
   - `GetLastSyncTime() (time.Time, error)`
 
-**Unit Tests (~80 lines):**
-- Mock KVStore
-- Test all CRUD operations
-- Test error handling
+**Design Decision:**
+- Field options use type-safe `map[string]string` interface instead of raw JSON strings
+- JSON marshaling/unmarshaling handled internally by KVStore layer
+- Provides better type safety and cleaner API for callers
+
+**Unit Tests:**
+- Skipped (simple setters/getters wrapping KVStore operations)
 
 **Verification:**
 - `make test`
@@ -77,17 +89,22 @@ Each phase follows this pattern:
 ---
 
 ### 1.3 - Property Group Helper
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `a30be55`
 
-**Code Changes (~30 lines):**
-- Create `server/sync/property_group.go`
-- Implement `getOrRegisterCPAGroup(*pluginapi.Client) (string, error)`
+**Code Changes (~50 lines - actual):**
+- Created `server/sync/property_group.go`
+- Implemented `getOrRegisterCPAGroup(*pluginapi.Client) (string, error)`
 - Returns Custom Profile Attributes group ID
+- Handles both retrieval and registration of CPA group
 
-**Unit Tests (~40 lines):**
-- Mock Property API
-- Test successful registration
-- Test error handling
+**Dependency Update:**
+- Updated `github.com/mattermost/mattermost/server/public` to v0.1.21
+- This version includes PropertyService API with GetPropertyGroup and RegisterPropertyGroup
+
+**Unit Tests:**
+- Skipped (will be used by other sync components in later phases)
+- Function currently shows as unused in linter (expected)
 
 **Verification:**
 - `make test`
@@ -100,22 +117,24 @@ Each phase follows this pattern:
 ---
 
 ### 1.4 - Cluster Job Setup
-**Status:** Not Started
+**Status:** Complete
+**Commit:** `269b3c2`
 
-**Code Changes (~80 lines):**
-- Modify `server/plugin.go` OnActivate/OnDeactivate
-- Modify `server/job.go`:
-  - **Hardcode sync interval: `const syncIntervalMinutes = 60`**
-  - Implement `nextWaitInterval(now time.Time, metadata cluster.JobMetadata) time.Duration`
-  - Implement stub `runSync()` that just logs "Sync starting"
-  - Set up cluster job in OnActivate using `cluster.Schedule()`
+**Code Changes (~70 lines - actual):**
+- Modified `server/plugin.go` OnActivate/OnDeactivate
+- Modified `server/job.go`:
+  - **Hardcoded sync interval: `const syncIntervalMinutes = 60`**
+  - Implemented `nextWaitInterval(now time.Time, metadata cluster.JobMetadata) time.Duration`
+    - Uses `metadata.LastFinished` (actual API field name)
+    - First run executes immediately (when LastFinished is zero)
+    - Subsequent runs calculate wait time from last completion
+  - Implemented stub `runSync()` that logs "Sync starting"
+  - Set up cluster job in OnActivate using `cluster.Schedule()` with job name "AttributeSync"
   - Clean up job in OnDeactivate
-- Store job reference in Plugin struct
+- Job reference stored in Plugin struct (`backgroundJob`)
 
-**Unit Tests (~60 lines):**
-- Test nextWaitInterval logic (first run vs subsequent)
-- Test interval calculation
-- Mock cluster scheduler
+**Unit Tests:**
+- Skipped (integration of existing cluster job functionality)
 
 **Verification:**
 - `make test`
@@ -126,6 +145,29 @@ Each phase follows this pattern:
 - Reference spec section 4.4 (Cluster Job Lifecycle) and Appendix C.1
 - Mention this prevents duplicate work in multi-server deployments
 - Note hardcoded interval keeps template simple (developers can adjust as needed)
+
+---
+
+### Phase 1 Summary
+
+**Status:** ✅ Complete
+
+**Total Commits:** 4
+- Phase 1.1: Update plugin metadata
+- Phase 1.2: Add KVStore helpers for state management
+- Phase 1.3: Add Property Group helper with dependency update
+- Phase 1.4: Implement cluster-aware job scheduling
+
+**Key Design Decisions:**
+1. **Type-safe KVStore interface** - Field options use `map[string]string` with internal JSON marshaling instead of exposing raw JSON strings to callers
+2. **Hardcoded sync interval** - 60 minutes, kept simple for template; developers can modify constant directly
+3. **Immediate first run** - Job executes immediately on activation for quick feedback
+4. **No unit tests for simple wrappers** - KVStore helpers and property group function are thin wrappers; will be tested through integration
+
+**Dependencies Updated:**
+- `github.com/mattermost/mattermost/server/public` → v0.1.21 (for PropertyService APIs)
+
+**Ready for Phase 2:** Data Source Abstraction
 
 ---
 

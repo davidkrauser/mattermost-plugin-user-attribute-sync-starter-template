@@ -778,6 +778,14 @@ The User Attribute Sync plugin follows a layered architecture with clear separat
 │  │  └──────────────┘         └──────────────────┘      │ │
 │  │                                                       │ │
 │  │  ┌─────────────────────────────────────────────┐    │ │
+│  │  │  FieldCache (per-sync)                       │    │ │
+│  │  │  - In-memory cache of field mappings        │    │ │
+│  │  │  - In-memory cache of field options         │    │ │
+│  │  │  - Wraps KVStore for performance            │    │ │
+│  │  └───────────────────┬─────────────────────────┘    │ │
+│  │                      │                               │ │
+│  │                      ▼                               │ │
+│  │  ┌─────────────────────────────────────────────┐    │ │
 │  │  │  KVStore                                     │    │ │
 │  │  │  - Field mappings (name → ID)               │    │ │
 │  │  │  - Accumulated multiselect options          │    │ │
@@ -797,6 +805,7 @@ The User Attribute Sync plugin follows a layered architecture with clear separat
 **Design Principles:**
 - **Cluster-Aware**: Uses Mattermost cluster jobs to ensure only one instance syncs in multi-server deployments
 - **Dynamic Schema**: Fields are created on-the-fly from JSON structure, no predefined schema required
+- **Performance-Optimized**: FieldCache provides in-memory lookups during sync, avoiding repeated KVStore reads for field mappings and multiselect options
 - **Data Source Agnostic**: AttributeProvider interface enables swapping file/API/LDAP sources
 - **Incremental Updates**: Only changed users are processed after initial sync
 - **Append-Only Options**: Multiselect options accumulate over time, never removed
@@ -812,6 +821,7 @@ The User Attribute Sync plugin follows a layered architecture with clear separat
 | **Plugin** | `server/plugin.go` | Manages plugin lifecycle, configuration changes, and coordinates cluster job |
 | **Configuration** | `server/configuration.go` | Handles plugin settings (sync interval, data source config) |
 | **Cluster Job** | `server/job.go` | Orchestrates periodic sync using Mattermost cluster job system |
+| **FieldCache** | `server/sync/field_cache.go` | In-memory cache of field mappings and options; wraps KVStore for performance |
 | **Field Synchronizer** | `server/sync/field_sync.go` | Infers field types, creates PropertyFields, manages multiselect options |
 | **Value Synchronizer** | `server/sync/value_sync.go` | Resolves users by email, formats values, upserts PropertyValues |
 | **AttributeProvider Interface** | `server/sync/provider.go` | Abstract interface for data sources |
@@ -825,6 +835,79 @@ The User Attribute Sync plugin follows a layered architecture with clear separat
 |-----------|------|---------|
 | **KVStore** | `server/store/kvstore/` | Stores field mappings, accumulated options, sync metadata |
 | **Logger** | Via `pluginapi.Client.Log` | Structured logging throughout the plugin |
+
+#### FieldCache Design
+
+The **FieldCache** is a per-sync-run in-memory cache that wraps the KVStore to provide fast lookups during synchronization. It addresses a critical performance concern: during value synchronization, the plugin needs to look up field IDs and multiselect option IDs for every user attribute being synced. Without caching, this would require hundreds or thousands of KVStore reads for a typical sync run.
+
+**Performance Problem:**
+```
+Without cache (direct KVStore access):
+  - Syncing 100 users with 5 attributes each = 500 field ID lookups
+  - If 2 attributes are multiselect with 3 options average = 600 option ID lookups
+  - Total: 1,100 KVStore reads per sync
+
+With FieldCache (in-memory):
+  - Initial load: ~5-10 KVStore reads (all fields and their options)
+  - During sync: 1,100 in-memory lookups (virtually instant)
+  - Performance improvement: 100x+ faster
+```
+
+**Design Characteristics:**
+
+1. **Per-Sync Lifecycle**: Cache is created at the start of each sync run and discarded when complete. This ensures the cache is always fresh and eliminates staleness concerns.
+
+2. **Eager Loading**: Cache loads all field mappings and options from KVStore during initialization, providing fast lookups throughout the sync.
+
+3. **Write-Through**: When new fields or options are created, the cache updates both its in-memory state and the underlying KVStore, keeping them synchronized.
+
+4. **Interface-Based**: Defined as an interface for testability and potential future extensions (e.g., a developer might add field metadata caching).
+
+**Interface Definition:**
+```go
+type FieldCache interface {
+    // GetFieldID returns the Mattermost field ID for a given field name
+    GetFieldID(fieldName string) (string, error)
+
+    // GetOptionID returns the option ID for a given field and option name
+    GetOptionID(fieldName, optionName string) (string, error)
+
+    // SaveFieldMapping persists a field name → field ID mapping
+    SaveFieldMapping(fieldName, fieldID string) error
+
+    // SaveFieldOptions persists all options for a multiselect field
+    SaveFieldOptions(fieldName string, options map[string]string) error
+}
+```
+
+**Usage Pattern:**
+```go
+// In runSync():
+cache := NewFieldCache(p.kvstore)
+if err := cache.Load(); err != nil {
+    return errors.Wrap(err, "failed to load field cache")
+}
+
+// Pass cache to all sync functions
+fieldMappings, err := syncFields(p.client, groupID, users, cache)
+if err != nil {
+    return errors.Wrap(err, "failed to sync fields")
+}
+
+err = syncUsers(p.client, groupID, users, fieldMappings, cache)
+if err != nil {
+    return errors.Wrap(err, "failed to sync users")
+}
+```
+
+**Why Interface-Based:**
+This template uses an interface for the FieldCache (rather than a concrete struct) because we anticipate plugin developers will want to extend it. Common extensions might include:
+- Caching full PropertyField objects (not just IDs)
+- Adding field type information for validation
+- Implementing refresh/invalidation logic for long-running plugins
+- Adding metrics/instrumentation
+
+The interface makes the cache implementation a swappable component that can be extended without changing all the calling code.
 
 ### 4.3 Data Flow
 
@@ -847,9 +930,18 @@ External Data Source (JSON/REST API/etc.)
 │  (Orchestrator)    │
 └────────────────────┘
          │
+         │ 3. Initialize FieldCache
+         ▼
+┌────────────────────┐
+│   FieldCache       │◄───────┐
+│  (in-memory)       │        │
+│                    │        │ Write-through
+│ Load from KVStore  │        │ on updates
+└────────────────────┘        │
+         │                    │
          ├─────────────────────┬────────────────────────┐
          │                     │                        │
-         │ 3a. Sync Fields     │ 3b. Sync Values        │
+         │ 4a. Sync Fields     │ 4b. Sync Values        │
          ▼                     ▼                        │
 ┌──────────────────┐  ┌──────────────────────┐        │
 │  Field Sync      │  │   Value Sync         │        │
@@ -857,11 +949,11 @@ External Data Source (JSON/REST API/etc.)
 │ For each unique  │  │ For each user:       │        │
 │ JSON key:        │  │ - Lookup by email    │        │
 │ - Infer type     │  │ - Format values      │        │
-│ - Create/update  │  │ - Build PropertyVals │        │
+│ - Create/update  │──┤ - Build PropertyVals │        │
 │ - Add options    │  │ - Bulk upsert        │        │
 └──────────────────┘  └──────────────────────┘        │
          │                     │                        │
-         │ 4a. PropertyField   │ 4b. PropertyValue      │
+         │ 5a. PropertyField   │ 5b. PropertyValue      │
          │     CRUD            │     Upsert             │
          ▼                     ▼                        │
 ┌─────────────────────────────────────────────┐        │
@@ -872,12 +964,12 @@ External Data Source (JSON/REST API/etc.)
 │  - UpsertPropertyValues                     │        │
 └─────────────────────────────────────────────┘        │
          │                                              │
-         │ 5. Store Metadata                            │
+         │ 6. Store Metadata                            │
          ▼                                              │
 ┌────────────────────┐                                 │
 │     KVStore        │                                 │
 │ - Field name → ID  │◄────────────────────────────────┘
-│ - Field options    │    6. Update state
+│ - Field options    │    7. Update state
 │ - Last sync time   │
 └────────────────────┘
 ```
@@ -914,8 +1006,11 @@ The actual cluster job API uses `metadata.LastFinished` (not `LastFinishedAt`) t
 ```
 1. Cluster job scheduler invokes p.runSync()
 2. Load plugin configuration
-3. Initialize AttributeProvider
-4. Call provider.GetUserAttributes()
+3. Initialize FieldCache (wraps KVStore for performance)
+   └─> Eager-loads all field mappings and options into memory
+   └─> Provides fast lookup during sync without repeated KVStore reads
+4. Initialize AttributeProvider
+5. Call provider.GetUserAttributes()
    └─> Returns: Array of user objects with changed attributes
        - First sync: All users
        - Subsequent syncs: Only users changed since last sync timestamp
@@ -965,7 +1060,8 @@ Example response:
 For each discovered field:
 
   1. Check if field exists
-     └─> Query KVStore for field name → Mattermost field ID mapping
+     └─> Query FieldCache for field name → Mattermost field ID mapping
+     └─> FieldCache checks in-memory map, falls back to KVStore if not cached
 
   2a. If field does NOT exist:
       - Create new PropertyField
@@ -973,7 +1069,7 @@ For each discovered field:
         * Type: inferred type
         * Display name: title-cased transformation
       - For multiselect: initialize with empty options list
-      - Store mapping in KVStore (name → ID)
+      - Store mapping in FieldCache (updates both memory and KVStore)
       - Log: "Created field: {name} (type: {type})"
 
   2b. If field exists:
@@ -981,7 +1077,7 @@ For each discovered field:
       - Continue to options management
 
   3. For multiselect fields only - Manage Options:
-     a. Query current field definition to get existing options
+     a. Get existing options from FieldCache (in-memory lookup)
      b. Collect all unique values from user data for this field
      c. Compare with existing options:
         - Existing option with same name → reuse existing ID
@@ -989,7 +1085,7 @@ For each discovered field:
      d. If new options found:
         - Build updated options list (existing + new)
         - Update PropertyField via UpdatePropertyField()
-        - Store updated options in KVStore
+        - Store updated options in FieldCache (updates both memory and KVStore)
         - Log: "Added {count} new options to {field_name}"
 
   4. Handle errors:
@@ -1036,7 +1132,7 @@ For each user object in the response:
 
   3. For each field in user object (except "email"):
 
-     a. Look up PropertyField ID from KVStore mapping
+     a. Look up PropertyField ID from FieldCache (in-memory lookup)
         - If field not found: Log error, skip this field
 
      b. Format value based on field type:
@@ -1047,7 +1143,7 @@ For each user object in the response:
 
         Multiselect:
           value = ["Level2", "Level3"]
-          1. Look up option IDs for each value name
+          1. Look up option IDs from FieldCache (in-memory lookup)
           2. formatted = json.Marshal(["opt_def456", "opt_ghi789"])
 
         Date:

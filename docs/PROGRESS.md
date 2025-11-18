@@ -26,11 +26,11 @@ After completing all sub-phases in a phase:
 - **Phase 1**: Foundation and Infrastructure (4 phases)
 - **Phase 2**: Data Source Abstraction (3 phases)
 - **Phase 3**: Field Management (7 phases)
-- **Phase 4**: Value Synchronization (7 phases)
+- **Phase 4**: Value Synchronization (8 phases) - includes new Phase 4.0 for FieldCache
 - **Phase 5**: Testing and Validation (1 phase)
 - **Phase 6**: Documentation and Polish (3 phases)
 
-**Total: 22 phases**
+**Total: 23 phases**
 
 ---
 
@@ -541,9 +541,54 @@ After completing all sub-phases in a phase:
 
 **Ready for Phase 4:** Value Synchronization
 
+**Note:** Phase 3.7's `syncFields()` function will be refactored in Phase 4.0 to use `FieldCache` instead of directly accessing `*kvstore.Client`. This ensures all code uses the performance-optimized cache consistently.
+
 ---
 
 ## Phase 4: Value Synchronization
+
+### 4.0 - Field Cache Implementation
+**Status:** Not Started
+
+**Code Changes (~120 lines):**
+- Create `server/sync/field_cache.go`
+- Define `FieldCache` interface:
+  - `GetFieldID(fieldName string) (string, error)`
+  - `GetOptionID(fieldName, optionName string) (string, error)`
+  - `SaveFieldMapping(fieldName, fieldID string) error`
+  - `SaveFieldOptions(fieldName string, options map[string]string) error`
+  - `Load() error` - Eager-loads all mappings/options from KVStore
+- Implement `fieldCacheImpl` struct:
+  - `store *kvstore.Client`
+  - `fieldMappings map[string]string` - in-memory cache
+  - `fieldOptions map[string]map[string]string` - in-memory cache
+- Implement constructor `NewFieldCache(store *kvstore.Client) FieldCache`
+- Implement write-through caching (updates both memory and KVStore)
+
+**Unit Tests (~100 lines):**
+- Test Load() populates cache from KVStore
+- Test GetFieldID() with cached and uncached values
+- Test GetOptionID() with nested lookups
+- Test SaveFieldMapping() updates both cache and KVStore
+- Test SaveFieldOptions() updates both cache and KVStore
+- Test error handling (KVStore failures)
+- Mock KVStore
+
+**Verification:**
+- `make test`
+- `make check-style`
+
+**Commit Message Guidance:**
+- Explain WHY in-memory cache is needed (performance optimization for value sync)
+- Reference the performance problem: 100 users × 5 attributes = 500+ KVStore reads without cache
+- Mention per-sync lifecycle ensures cache freshness
+- Explain write-through strategy maintains KVStore consistency
+- Note interface design enables future extensions by plugin developers
+
+**Impact on Phase 3.7:**
+After Phase 4.0 is complete, Phase 3.7's `syncFields()` function will be refactored to accept `FieldCache` instead of `*kvstore.Client`. This refactoring will be done in Phase 4.0 as part of the same commit, ensuring all code uses the cache consistently.
+
+---
 
 ### 4.1 - User Resolution
 **Status:** Not Started
@@ -603,17 +648,18 @@ After completing all sub-phases in a phase:
 
 **Code Changes (~50 lines):**
 - Add to `server/sync/value_sync.go`
-- Implement `formatMultiselectValue(values interface{}, field *model.PropertyField) (json.RawMessage, error)`:
-  - Extract option name → ID mapping from field
+- Implement `formatMultiselectValue(values interface{}, fieldName string, cache FieldCache) (json.RawMessage, error)`:
+  - Get option name → ID mapping from FieldCache (in-memory lookup)
   - Convert array of names to array of IDs
   - Marshal to JSON
   - Handle missing options
 
 **Unit Tests (~70 lines):**
-- Test option ID lookup
+- Test option ID lookup from cache
 - Test multiple values
 - Test empty array
 - Test missing option error
+- Mock FieldCache
 
 **Verification:**
 - `make test`
@@ -621,6 +667,7 @@ After completing all sub-phases in a phase:
 
 **Commit Message Guidance:**
 - Explain WHY option ID conversion (Mattermost stores IDs not names)
+- Explain WHY FieldCache instead of PropertyField (avoids API calls, uses cached data)
 - Reference spec section 4.4 (step 4)
 - Mention validation prevents invalid option references
 
@@ -631,10 +678,10 @@ After completing all sub-phases in a phase:
 
 **Code Changes (~70 lines):**
 - Add to `server/sync/value_sync.go`
-- Implement `buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string, userAttrs map[string]interface{}, fieldMappings map[string]string, fields map[string]*model.PropertyField) ([]*model.PropertyValue, error)`:
+- Implement `buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string, userAttrs map[string]interface{}, cache FieldCache) ([]*model.PropertyValue, error)`:
   - Loop through user attributes (except email)
-  - Look up field ID and field definition
-  - Format value based on type
+  - Look up field ID from cache
+  - Format value based on type (text/date/multiselect)
   - Build PropertyValue structs
   - Return array
 
@@ -642,7 +689,7 @@ After completing all sub-phases in a phase:
 - Test all field types
 - Test missing fields
 - Test format errors
-- Mock field data
+- Mock FieldCache
 
 **Verification:**
 - `make test`
@@ -650,6 +697,7 @@ After completing all sub-phases in a phase:
 
 **Commit Message Guidance:**
 - Explain WHY batch construction (prepares for bulk upsert)
+- Explain WHY FieldCache simplifies function signature (no need to pass field mappings separately)
 - Reference spec section 4.4 (step 4)
 - Mention per-user batching for atomicity
 
@@ -684,22 +732,20 @@ After completing all sub-phases in a phase:
 ### 4.6 - User Sync Orchestrator
 **Status:** Not Started
 
-**Code Changes (~80 lines):**
+**Code Changes (~70 lines):**
 - Add to `server/sync/value_sync.go`
-- Implement `syncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, fieldMappings map[string]string, fields map[string]*model.PropertyField) (successCount, skippedCount int, err error)`:
+- Implement `syncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache FieldCache) error`:
   - Loop through users
   - Resolve by email (skip if not found)
-  - Build property values
+  - Build property values using cache
   - Upsert
-  - Track statistics
-  - Log errors but continue
+  - Log errors but continue with next user
 
 **Unit Tests (~100 lines):**
 - Test successful sync
 - Test user not found handling
 - Test partial failures
-- Test statistics tracking
-- Mock all dependencies
+- Mock all dependencies (API, FieldCache)
 
 **Verification:**
 - `make test`
@@ -707,41 +753,47 @@ After completing all sub-phases in a phase:
 
 **Commit Message Guidance:**
 - Explain WHY partial failure handling (don't fail entire sync for one user)
+- Explain WHY simplified signature (FieldCache encapsulates field mappings and options)
 - Reference spec FR7
-- Mention statistics enable observability
+- Mention graceful degradation enables progress despite individual failures
+- Note: Removed statistics tracking (successCount/skippedCount) per user feedback - logging per-user is sufficient
 
 ---
 
 ### 4.7 - Main Sync Orchestrator
 **Status:** Not Started
 
-**Code Changes (~90 lines):**
+**Code Changes (~100 lines):**
 - Update `server/job.go` runSync function:
+  - Initialize FieldCache and load from KVStore
   - Initialize provider
   - Fetch users from provider
-  - If no users, return early
-  - Sync fields
-  - Query field definitions for multiselect
-  - Sync values
-  - Update last sync timestamp
-  - Log comprehensive summary
+  - If no users, return early (log and exit)
+  - Get or register CPA group
+  - Sync fields (pass cache)
+  - Sync values (pass cache)
+  - Update last sync timestamp in KVStore
+  - Log comprehensive summary with error wrapping
 
 **Unit Tests (~120 lines):**
-- Test full sync flow
+- Test full sync flow with cache
 - Test empty users handling
+- Test cache initialization errors
 - Test provider errors
 - Test field sync errors
 - Test value sync errors
-- Mock all dependencies
+- Mock all dependencies (provider, FieldCache, API, KVStore)
 
 **Verification:**
 - `make test`
 - `make check-style`
 
 **Commit Message Guidance:**
-- Explain WHY orchestrator coordinates entire flow (single entry point)
-- Reference spec section 4.4 (all steps)
-- Mention this completes the sync implementation
+- Explain WHY orchestrator coordinates entire flow (single entry point, manages lifecycle)
+- Explain WHY FieldCache initialization happens here (per-sync lifecycle, fresh data)
+- Reference spec section 4.4 (complete sync workflow)
+- Mention error wrapping provides full context when issues occur
+- Note this completes the core sync implementation
 
 ---
 
@@ -850,17 +902,18 @@ After completing all sub-phases in a phase:
 
 ## Summary
 
-**Total Phases:** 22
+**Total Phases:** 23
 - Phase 1 (Foundation): 4 phases
 - Phase 2 (Data Source): 3 phases
 - Phase 3 (Field Management): 7 phases
-- Phase 4 (Value Sync): 7 phases
+- Phase 4 (Value Sync): 8 phases (includes FieldCache)
 - Phase 5 (Testing): 1 phase
 - Phase 6 (Documentation): 3 phases
 
 **Key Design Decisions:**
 - No configuration system - hardcoded values
 - Sync interval: 60 minutes (hardcoded)
-- File path: `assets/user_attributes.json` (hardcoded)
+- File path: `data/user_attributes.json` (hardcoded)
 - No metadata file - use `os.Stat()` for file modification tracking
+- FieldCache: Per-sync in-memory cache wrapping KVStore for performance
 - Each phase = one commit with code + tests + verification

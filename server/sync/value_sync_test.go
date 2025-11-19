@@ -92,3 +92,89 @@ func TestFormatStringValue(t *testing.T) {
 		assert.Equal(t, "Hello 世界 🌍", decoded)
 	})
 }
+
+func TestFormatMultiselectValue(t *testing.T) {
+	t.Run("multiple option values", func(t *testing.T) {
+		cache := &mockFieldCache{}
+		cache.On("GetOptionID", "security_clearance", "Level1").Return("opt_abc123", nil)
+		cache.On("GetOptionID", "security_clearance", "Level3").Return("opt_ghi789", nil)
+
+		result, err := formatMultiselectValue(cache, "security_clearance", []string{"Level1", "Level3"})
+		require.NoError(t, err)
+
+		// Verify it's properly JSON-encoded array of IDs
+		var decoded []string
+		err = json.Unmarshal(result, &decoded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"opt_abc123", "opt_ghi789"}, decoded)
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("single option value", func(t *testing.T) {
+		cache := &mockFieldCache{}
+		cache.On("GetOptionID", "programs", "Apples").Return("opt_aaa111", nil)
+
+		result, err := formatMultiselectValue(cache, "programs", []string{"Apples"})
+		require.NoError(t, err)
+
+		var decoded []string
+		err = json.Unmarshal(result, &decoded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"opt_aaa111"}, decoded)
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("empty array", func(t *testing.T) {
+		cache := &mockFieldCache{}
+
+		result, err := formatMultiselectValue(cache, "programs", []string{})
+		require.NoError(t, err)
+
+		// Empty array should be encoded as []
+		assert.Equal(t, json.RawMessage(`[]`), result)
+
+		var decoded []string
+		err = json.Unmarshal(result, &decoded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{}, decoded)
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("missing option returns error", func(t *testing.T) {
+		cache := &mockFieldCache{}
+		cache.On("GetOptionID", "security_clearance", "Level1").Return("opt_abc123", nil)
+		cache.On("GetOptionID", "security_clearance", "Level99").Return("", assert.AnError)
+
+		_, err := formatMultiselectValue(cache, "security_clearance", []string{"Level1", "Level99"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Level99")
+		assert.Contains(t, err.Error(), "security_clearance")
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("missing field returns error", func(t *testing.T) {
+		cache := &mockFieldCache{}
+		cache.On("GetOptionID", "nonexistent_field", "Value1").Return("", assert.AnError)
+
+		_, err := formatMultiselectValue(cache, "nonexistent_field", []string{"Value1"})
+		require.Error(t, err)
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("empty option ID returns error", func(t *testing.T) {
+		cache := &mockFieldCache{}
+		cache.On("GetOptionID", "programs", "Oranges").Return("", nil)
+
+		_, err := formatMultiselectValue(cache, "programs", []string{"Oranges"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Oranges")
+		assert.Contains(t, err.Error(), "not found")
+
+		cache.AssertExpectations(t)
+	})
+}

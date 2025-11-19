@@ -8,6 +8,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -362,5 +363,198 @@ func TestBuildPropertyValues(t *testing.T) {
 		assert.Len(t, values, 0)
 
 		cache.AssertExpectations(t)
+	})
+}
+
+func TestSyncUsers(t *testing.T) {
+	groupID := "test-group-id"
+
+	t.Run("successfully syncs multiple users", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+		cache.On("GetFieldID", "location").Return("field_loc", nil)
+
+		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
+		user2 := &model.User{Id: "user2", Email: "user2@example.com"}
+
+		api.On("GetUserByEmail", "user1@example.com").Return(user1, nil)
+		api.On("GetUserByEmail", "user2@example.com").Return(user2, nil)
+		api.On("UpsertPropertyValues", mock.Anything).Return([]*model.PropertyValue{}, nil)
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		users := []map[string]interface{}{
+			{
+				"email":      "user1@example.com",
+				"department": "Engineering",
+				"location":   "US-East",
+			},
+			{
+				"email":      "user2@example.com",
+				"department": "Sales",
+				"location":   "US-West",
+			},
+		}
+
+		err := syncUsers(client, groupID, users, cache)
+		require.NoError(t, err)
+
+		cache.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("skips user without email", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+
+		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
+
+		api.On("GetUserByEmail", "user1@example.com").Return(user1, nil)
+		api.On("UpsertPropertyValues", mock.Anything).Return([]*model.PropertyValue{}, nil)
+		api.On("LogWarn", "User object missing email field, skipping")
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		users := []map[string]interface{}{
+			{
+				"department": "Engineering", // Missing email
+			},
+			{
+				"email":      "user1@example.com",
+				"department": "Sales",
+			},
+		}
+
+		err := syncUsers(client, groupID, users, cache)
+		require.NoError(t, err)
+
+		cache.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("skips user not found in Mattermost", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+
+		user2 := &model.User{Id: "user2", Email: "user2@example.com"}
+
+		notFoundErr := model.NewAppError("GetUserByEmail", "app.user.get_by_email.app_error", nil, "", 404)
+		api.On("GetUserByEmail", "notfound@example.com").Return(nil, notFoundErr)
+		api.On("GetUserByEmail", "user2@example.com").Return(user2, nil)
+		api.On("UpsertPropertyValues", mock.Anything).Return([]*model.PropertyValue{}, nil)
+		api.On("LogWarn", "User not found by email, skipping",
+			"email", "notfound@example.com",
+			"error", mock.Anything) // Accept any error string
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		users := []map[string]interface{}{
+			{
+				"email":      "notfound@example.com",
+				"department": "Engineering",
+			},
+			{
+				"email":      "user2@example.com",
+				"department": "Sales",
+			},
+		}
+
+		err := syncUsers(client, groupID, users, cache)
+		require.NoError(t, err)
+
+		cache.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("skips user with empty attributes", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+
+		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
+
+		api.On("GetUserByEmail", "user1@example.com").Return(user1, nil)
+		api.On("LogDebug", "No property values to sync for user", "email", "user1@example.com")
+
+		users := []map[string]interface{}{
+			{
+				"email": "user1@example.com", // Only email, no other attributes
+			},
+		}
+
+		err := syncUsers(client, groupID, users, cache)
+		require.NoError(t, err)
+
+		cache.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("continues sync when upsert fails for one user", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+
+		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
+		user2 := &model.User{Id: "user2", Email: "user2@example.com"}
+
+		api.On("GetUserByEmail", "user1@example.com").Return(user1, nil)
+		api.On("GetUserByEmail", "user2@example.com").Return(user2, nil)
+
+		// First user upsert fails
+		api.On("UpsertPropertyValues", mock.MatchedBy(func(values []*model.PropertyValue) bool {
+			return len(values) > 0 && values[0].TargetID == "user1"
+		})).Return(nil, assert.AnError).Once()
+
+		// Second user upsert succeeds
+		api.On("UpsertPropertyValues", mock.MatchedBy(func(values []*model.PropertyValue) bool {
+			return len(values) > 0 && values[0].TargetID == "user2"
+		})).Return([]*model.PropertyValue{}, nil).Once()
+
+		api.On("LogError", "Failed to upsert property values, skipping user",
+			"user_email", "user1@example.com",
+			"value_count", 1,
+			"error", mock.Anything) // Accept any error string
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+		users := []map[string]interface{}{
+			{
+				"email":      "user1@example.com",
+				"department": "Engineering",
+			},
+			{
+				"email":      "user2@example.com",
+				"department": "Sales",
+			},
+		}
+
+		err := syncUsers(client, groupID, users, cache)
+		require.NoError(t, err)
+
+		cache.AssertExpectations(t)
+		api.AssertExpectations(t)
+	})
+
+	t.Run("handles empty users array", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+
+		users := []map[string]interface{}{}
+
+		err := syncUsers(client, groupID, users, cache)
+		require.NoError(t, err)
+
+		cache.AssertExpectations(t)
+		api.AssertExpectations(t)
 	})
 }

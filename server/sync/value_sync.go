@@ -188,3 +188,82 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 
 	return values, nil
 }
+
+// syncUsers synchronizes attribute values for all users from external data.
+//
+// This is the main orchestrator for value synchronization. It processes each user
+// independently, ensuring that failures for individual users don't block the entire
+// sync operation. This graceful degradation is critical for production reliability.
+//
+// For each user:
+//  1. Resolve Mattermost user by email
+//  2. Build PropertyValues for all attributes
+//  3. Bulk upsert values via PropertyService API
+//
+// Args:
+//   - api: Mattermost API client
+//   - groupID: Property group ID (custom_profile_attributes)
+//   - users: Array of user attribute maps from external system
+//   - cache: FieldCache for field and option ID lookups
+//
+// Returns:
+//   - Error only if critical failure occurs (individual user failures are logged)
+//
+// Design decisions:
+//   - User not found by email → logged as warning, skipped
+//   - Empty attributes → skipped (no values to sync)
+//   - PropertyValue build failure → logged, skipped
+//   - Upsert failure → logged, continue with next user
+//
+// This partial failure handling ensures progress even when some users have data
+// quality issues or have been removed from Mattermost.
+func syncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache FieldCache) error {
+	for _, userAttrs := range users {
+		// Extract email for user resolution
+		email, ok := userAttrs["email"].(string)
+		if !ok || email == "" {
+			api.Log.Warn("User object missing email field, skipping")
+			continue
+		}
+
+		// Resolve Mattermost user by email
+		user, err := api.User.GetByEmail(email)
+		if err != nil {
+			api.Log.Warn("User not found by email, skipping",
+				"email", email,
+				"error", err.Error())
+			continue
+		}
+
+		// Build PropertyValues for this user
+		values, err := buildPropertyValues(api, user, groupID, userAttrs, cache)
+		if err != nil {
+			api.Log.Error("Failed to build property values, skipping user",
+				"user_email", email,
+				"error", err.Error())
+			continue
+		}
+
+		// Skip if no values to sync (e.g., only email field present)
+		if len(values) == 0 {
+			api.Log.Debug("No property values to sync for user", "email", email)
+			continue
+		}
+
+		// Bulk upsert all values for this user
+		_, err = api.Property.UpsertPropertyValues(values)
+		if err != nil {
+			api.Log.Error("Failed to upsert property values, skipping user",
+				"user_email", email,
+				"value_count", len(values),
+				"error", err.Error())
+			continue
+		}
+
+		api.Log.Debug("Successfully synced user attributes",
+			"email", email,
+			"attribute_count", len(values))
+	}
+
+	return nil
+}

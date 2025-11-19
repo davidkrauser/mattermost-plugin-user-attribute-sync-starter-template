@@ -226,6 +226,9 @@ func TestSyncFields(t *testing.T) {
 			return f.Name == "Department"
 		})).Return(nil, errors.New("API error"))
 
+		// Mock fallback SearchPropertyFields call (department doesn't exist)
+		api.On("SearchPropertyFields", groupID, mock.Anything).Return([]*model.PropertyField{}, nil)
+
 		// Location creation succeeds
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.Name == "Location"

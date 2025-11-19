@@ -277,6 +277,52 @@ func mergeOptions(existingOptions []map[string]interface{}, newValues []string) 
 // Each helper function (discoverFields, createPropertyField, mergeOptions) handles
 // one specific task with clear inputs/outputs. The orchestrator combines them into
 // a coherent workflow, making the code testable and maintainable.
+// queryExistingFieldByName searches for an existing property field by name in the given group.
+// This is used as a fallback when field creation fails due to the field already existing.
+//
+// The function uses the SearchPropertyFields API to fetch all fields in the group, then
+// searches through them to find one matching the given name and type.
+//
+// Parameters:
+//   - client: pluginapi.Client for accessing Mattermost APIs
+//   - groupID: The Custom Profile Attributes group ID
+//   - fieldName: The internal field name to search for (e.g., "department")
+//   - fieldType: The expected field type (text, multiselect, or date)
+//
+// Returns:
+//   - The found PropertyField, or nil if not found
+//   - Error if the API call fails
+func queryExistingFieldByName(
+	client *pluginapi.Client,
+	groupID string,
+	fieldName string,
+	fieldType model.PropertyFieldType,
+) (*model.PropertyField, error) {
+	// Search for all fields in the group
+	// Using a large PerPage to get all fields in one request (reasonable for typical use cases)
+	opts := model.PropertyFieldSearchOpts{
+		GroupID:        groupID,
+		IncludeDeleted: false,
+		PerPage:        1000,
+	}
+
+	fields, err := client.Property.SearchPropertyFields(groupID, opts)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to search property fields")
+	}
+
+	// Search through fields to find one matching our name
+	displayName := toDisplayName(fieldName)
+	for _, field := range fields {
+		if field.Name == displayName && field.Type == fieldType {
+			return field, nil
+		}
+	}
+
+	// Field not found
+	return nil, nil
+}
+
 //
 // Graceful degradation:
 // If a single field fails to create or update, we log the error but continue with
@@ -364,7 +410,56 @@ func SyncFields(
 				"type", fieldType,
 				"error", err.Error(),
 			)
-			// Continue with other fields - graceful degradation
+
+			// Fallback: Query API to check if field already exists (duplicate key error case)
+			// This handles the scenario where the field exists in DB but not in cache
+			existingField, queryErr := queryExistingFieldByName(client, groupID, fieldName, fieldType)
+			if queryErr != nil {
+				client.Log.Error("Failed to query existing field as fallback",
+					"field", fieldName,
+					"error", queryErr.Error(),
+				)
+				// Continue with other fields - graceful degradation
+				continue
+			}
+
+			if existingField != nil {
+				// Field exists! Save to cache and add to mapping
+				client.Log.Info("Found existing field via API query",
+					"field", fieldName,
+					"field_id", existingField.ID,
+				)
+
+				// Save to cache for future lookups
+				if cacheErr := cache.SaveFieldMapping(fieldName, existingField.ID); cacheErr != nil {
+					client.Log.Warn("Failed to save field mapping to cache",
+						"field", fieldName,
+						"error", cacheErr.Error(),
+					)
+					// Don't fail - we can still use the field
+				}
+
+				// Add to mapping for this sync
+				fieldMapping[fieldName] = existingField.ID
+
+				// If it's a multiselect field, check if we need to add new options
+				if fieldType == model.PropertyFieldTypeMultiselect {
+					if updateErr := updateMultiselectOptions(client, groupID, existingField.ID, fieldName, users, cache); updateErr != nil {
+						client.Log.Warn("Failed to update multiselect options for recovered field",
+							"field", fieldName,
+							"error", updateErr.Error(),
+						)
+						// Continue - field exists and is usable even if option update failed
+					}
+				}
+
+				continue
+			}
+
+			// Field truly doesn't exist and we couldn't create it - graceful degradation
+			client.Log.Error("Field does not exist and could not be created",
+				"field", fieldName,
+			)
 			continue
 		}
 

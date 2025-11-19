@@ -485,10 +485,12 @@ func TestMergeOptions(t *testing.T) {
 		assert.Len(t, merged, 2, "Should have same number of options")
 		assert.Equal(t, 0, newCount, "No new options should be added")
 		// Verify IDs are preserved
-		assert.Equal(t, "id1", merged[0]["id"])
-		assert.Equal(t, "Alpha", merged[0]["name"])
-		assert.Equal(t, "id2", merged[1]["id"])
-		assert.Equal(t, "Beta", merged[1]["name"])
+		opt0 := merged[0].(map[string]interface{})
+		assert.Equal(t, "id1", opt0["id"])
+		assert.Equal(t, "Alpha", opt0["name"])
+		opt1 := merged[1].(map[string]interface{})
+		assert.Equal(t, "id2", opt1["id"])
+		assert.Equal(t, "Beta", opt1["name"])
 	})
 
 	t.Run("adds new options with new IDs", func(t *testing.T) {
@@ -503,17 +505,20 @@ func TestMergeOptions(t *testing.T) {
 		assert.Equal(t, 2, newCount, "Should have added 2 new options")
 
 		// First option should be preserved
-		assert.Equal(t, "id1", merged[0]["id"])
-		assert.Equal(t, "Alpha", merged[0]["name"])
+		opt0 := merged[0].(map[string]interface{})
+		assert.Equal(t, "id1", opt0["id"])
+		assert.Equal(t, "Alpha", opt0["name"])
 
 		// New options should have generated IDs
-		assert.NotEmpty(t, merged[1]["id"])
-		assert.Equal(t, "Beta", merged[1]["name"])
-		assert.NotEmpty(t, merged[2]["id"])
-		assert.Equal(t, "Gamma", merged[2]["name"])
+		opt1 := merged[1].(map[string]interface{})
+		assert.NotEmpty(t, opt1["id"])
+		assert.Equal(t, "Beta", opt1["name"])
+		opt2 := merged[2].(map[string]interface{})
+		assert.NotEmpty(t, opt2["id"])
+		assert.Equal(t, "Gamma", opt2["name"])
 
 		// New IDs should be different
-		assert.NotEqual(t, merged[1]["id"], merged[2]["id"])
+		assert.NotEqual(t, opt1["id"], opt2["id"])
 	})
 
 	t.Run("append-only strategy keeps all existing options", func(t *testing.T) {
@@ -533,7 +538,11 @@ func TestMergeOptions(t *testing.T) {
 		// All existing options should still be present
 		names := make([]string, len(merged))
 		for i, opt := range merged {
-			names[i] = opt["name"].(string)
+			if optMap, ok := opt.(map[string]interface{}); ok {
+				if name, nameOk := optMap["name"].(string); nameOk {
+					names[i] = name
+				}
+			}
 		}
 		assert.Contains(t, names, "Alpha")
 		assert.Contains(t, names, "Beta", "Beta should be kept even though not in new values")
@@ -549,8 +558,10 @@ func TestMergeOptions(t *testing.T) {
 
 		assert.Len(t, merged, 2)
 		assert.Equal(t, 2, newCount, "All values are new")
-		assert.Equal(t, "Alpha", merged[0]["name"])
-		assert.Equal(t, "Beta", merged[1]["name"])
+		opt0 := merged[0].(map[string]interface{})
+		assert.Equal(t, "Alpha", opt0["name"])
+		opt1 := merged[1].(map[string]interface{})
+		assert.Equal(t, "Beta", opt1["name"])
 	})
 
 	t.Run("handles empty new values", func(t *testing.T) {
@@ -564,8 +575,10 @@ func TestMergeOptions(t *testing.T) {
 
 		assert.Len(t, merged, 2, "Should keep all existing")
 		assert.Equal(t, 0, newCount, "No new options added")
-		assert.Equal(t, "id1", merged[0]["id"])
-		assert.Equal(t, "id2", merged[1]["id"])
+		opt0 := merged[0].(map[string]interface{})
+		assert.Equal(t, "id1", opt0["id"])
+		opt1 := merged[1].(map[string]interface{})
+		assert.Equal(t, "id2", opt1["id"])
 	})
 
 	t.Run("handles both empty", func(t *testing.T) {
@@ -592,7 +605,11 @@ func TestMergeOptions(t *testing.T) {
 
 		names := make([]string, len(merged))
 		for i, opt := range merged {
-			names[i] = opt["name"].(string)
+			if optMap, ok := opt.(map[string]interface{}); ok {
+				if name, nameOk := optMap["name"].(string); nameOk {
+					names[i] = name
+				}
+			}
 		}
 		assert.Equal(t, 1, countOccurrences(names, "Beta"), "Beta should appear exactly once")
 	})
@@ -607,20 +624,36 @@ func TestMergeOptions(t *testing.T) {
 		}
 		newValues := []string{"Alpha", "Beta", "Gamma"}
 
-		merged, _ := mergeOptions(existingOptions, newValues)
+		merged, newCount := mergeOptions(existingOptions, newValues)
 
-		// All existing options should be copied regardless of validity
-		assert.Len(t, merged, 7, "Should preserve all existing + add valid new")
+		// Only valid existing options should be preserved (just Alpha)
+		// Beta and Gamma will be added as new options since Beta's existing entry is malformed
+		assert.Len(t, merged, 3, "Should have 1 valid existing + 2 new (Beta, Gamma)")
+		assert.Equal(t, 2, newCount, "Should have added Beta and Gamma as new")
 
-		// Gamma should be added (Beta exists but with malformed data, so might be re-added)
+		// Verify Alpha is preserved with original ID
 		names := make([]string, 0)
 		for _, opt := range merged {
-			if name, ok := opt["name"].(string); ok {
-				names = append(names, name)
+			if optMap, ok := opt.(map[string]interface{}); ok {
+				if name, nameOk := optMap["name"].(string); nameOk {
+					names = append(names, name)
+				}
 			}
 		}
 		assert.Contains(t, names, "Alpha")
+		assert.Contains(t, names, "Beta")
 		assert.Contains(t, names, "Gamma")
+
+		// Verify Alpha kept its original ID
+		for _, opt := range merged {
+			if optMap, ok := opt.(map[string]interface{}); ok {
+				if name, nameOk := optMap["name"].(string); nameOk && name == "Alpha" {
+					if id, idOk := optMap["id"].(string); idOk {
+						assert.Equal(t, "id1", id, "Alpha should keep original ID")
+					}
+				}
+			}
+		}
 	})
 
 	t.Run("generates valid IDs for new options", func(t *testing.T) {
@@ -630,10 +663,12 @@ func TestMergeOptions(t *testing.T) {
 		merged, _ := mergeOptions(existingOptions, newValues)
 
 		for _, opt := range merged {
-			id, ok := opt["id"].(string)
-			assert.True(t, ok, "ID should be a string")
-			assert.NotEmpty(t, id, "ID should not be empty")
-			assert.True(t, model.IsValidId(id), "ID should be valid Mattermost ID")
+			if optMap, ok := opt.(map[string]interface{}); ok {
+				if id, idOk := optMap["id"].(string); idOk {
+					assert.NotEmpty(t, id, "ID should not be empty")
+					assert.True(t, model.IsValidId(id), "ID should be valid Mattermost ID")
+				}
+			}
 		}
 	})
 
@@ -648,10 +683,14 @@ func TestMergeOptions(t *testing.T) {
 		merged, _ := mergeOptions(existingOptions, newValues)
 
 		// First 3 should maintain original order
-		assert.Equal(t, "Zulu", merged[0]["name"])
-		assert.Equal(t, "Alpha", merged[1]["name"])
-		assert.Equal(t, "Mike", merged[2]["name"])
-		assert.Equal(t, "Bravo", merged[3]["name"])
+		opt0 := merged[0].(map[string]interface{})
+		assert.Equal(t, "Zulu", opt0["name"])
+		opt1 := merged[1].(map[string]interface{})
+		assert.Equal(t, "Alpha", opt1["name"])
+		opt2 := merged[2].(map[string]interface{})
+		assert.Equal(t, "Mike", opt2["name"])
+		opt3 := merged[3].(map[string]interface{})
+		assert.Equal(t, "Bravo", opt3["name"])
 	})
 }
 

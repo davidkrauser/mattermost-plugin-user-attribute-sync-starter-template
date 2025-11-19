@@ -103,7 +103,7 @@ func TestSyncFields(t *testing.T) {
 			if f.Type != model.PropertyFieldTypeMultiselect {
 				return false
 			}
-			options, ok := f.Attrs[model.PropertyFieldAttributeOptions].([]map[string]interface{})
+			options, ok := f.Attrs[model.PropertyFieldAttributeOptions].([]interface{})
 			return ok && len(options) == 3 // Alpha, Beta, Gamma
 		})).Return(&model.PropertyField{ID: "programs-id"}, nil)
 
@@ -151,7 +151,7 @@ func TestSyncFields(t *testing.T) {
 
 		// Mock field update (should add Gamma)
 		api.On("UpdatePropertyField", groupID, mock.MatchedBy(func(f *model.PropertyField) bool {
-			options, ok := f.Attrs[model.PropertyFieldAttributeOptions].([]map[string]interface{})
+			options, ok := f.Attrs[model.PropertyFieldAttributeOptions].([]interface{})
 			return ok && len(options) == 3 // Alpha, Beta, + Gamma
 		})).Return(existingField, nil)
 

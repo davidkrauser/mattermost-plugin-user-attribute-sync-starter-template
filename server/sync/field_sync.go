@@ -209,21 +209,26 @@ func extractMultiselectOptions(users []map[string]interface{}, fieldName string)
 // Returns:
 //   - Merged options list (existing + new)
 //   - Count of newly added options (0 if all values already existed)
-func mergeOptions(existingOptions []map[string]interface{}, newValues []string) ([]map[string]interface{}, int) {
+func mergeOptions(existingOptions []map[string]interface{}, newValues []string) ([]interface{}, int) {
 	// Build map of existing option names → IDs for fast lookup
 	existingMap := make(map[string]string)
+
+	// Start with all existing options (append-only strategy)
+	// Use []interface{} which is already registered with gob by Mattermost RPC system
+	merged := make([]interface{}, 0, len(existingOptions))
+
 	for _, option := range existingOptions {
 		// Extract name and ID from option map
 		name, nameOk := option["name"].(string)
 		id, idOk := option["id"].(string)
 		if nameOk && idOk {
 			existingMap[name] = id
+			merged = append(merged, map[string]interface{}{
+				"id":   id,
+				"name": name,
+			})
 		}
 	}
-
-	// Start with all existing options (append-only strategy)
-	merged := make([]map[string]interface{}, len(existingOptions))
-	copy(merged, existingOptions)
 
 	// Track count of new options added
 	newCount := 0
@@ -383,7 +388,8 @@ func createMultiselectFieldWithOptions(
 	optionValues := extractMultiselectOptions(users, fieldName)
 
 	// Build options list with generated IDs
-	options := make([]map[string]interface{}, len(optionValues))
+	// Use []interface{} which is already registered with gob by Mattermost RPC system
+	options := make([]interface{}, len(optionValues))
 	for i, value := range optionValues {
 		options[i] = map[string]interface{}{
 			"id":   model.NewId(),
@@ -416,7 +422,13 @@ func createMultiselectFieldWithOptions(
 	// Save initial options via cache for future merging
 	optionsMap := make(map[string]string)
 	for _, opt := range options {
-		optionsMap[opt["name"].(string)] = opt["id"].(string)
+		if optMap, ok := opt.(map[string]interface{}); ok {
+			if name, nameOk := optMap["name"].(string); nameOk {
+				if id, idOk := optMap["id"].(string); idOk {
+					optionsMap[name] = id
+				}
+			}
+		}
 	}
 	if err := cache.SaveFieldOptions(fieldName, optionsMap); err != nil {
 		client.Log.Warn("Failed to save field options via cache",
@@ -480,9 +492,11 @@ func updateMultiselectOptions(
 	// Update cache with new options mapping
 	optionsMap := make(map[string]string)
 	for _, opt := range mergedOptions {
-		if name, nameOk := opt["name"].(string); nameOk {
-			if id, idOk := opt["id"].(string); idOk {
-				optionsMap[name] = id
+		if optMap, ok := opt.(map[string]interface{}); ok {
+			if name, nameOk := optMap["name"].(string); nameOk {
+				if id, idOk := optMap["id"].(string); idOk {
+					optionsMap[name] = id
+				}
 			}
 		}
 	}

@@ -398,7 +398,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := syncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		cache.AssertExpectations(t)
@@ -429,7 +429,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := syncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		cache.AssertExpectations(t)
@@ -465,7 +465,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := syncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		cache.AssertExpectations(t)
@@ -489,7 +489,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := syncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		cache.AssertExpectations(t)
@@ -536,7 +536,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := syncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		cache.AssertExpectations(t)
@@ -551,7 +551,7 @@ func TestSyncUsers(t *testing.T) {
 
 		users := []map[string]interface{}{}
 
-		err := syncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		cache.AssertExpectations(t)

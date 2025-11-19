@@ -45,7 +45,7 @@ func TestSyncFields(t *testing.T) {
 		cache.On("SaveFieldMapping", "department", "dept-id").Return(nil)
 		cache.On("SaveFieldMapping", "location", "loc-id").Return(nil)
 
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 2)
@@ -71,7 +71,7 @@ func TestSyncFields(t *testing.T) {
 		cache.On("GetFieldID", "department").Return("existing-dept-id", nil)
 
 		// No field creation should occur
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 1)
@@ -113,7 +113,7 @@ func TestSyncFields(t *testing.T) {
 		// Mock logging (may log warnings if things fail)
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Equal(t, "programs-id", mapping["programs"])
@@ -160,7 +160,7 @@ func TestSyncFields(t *testing.T) {
 		// Mock logging (updateMultiselectOptions logs when it adds options)
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Equal(t, "existing-programs-id", mapping["programs"])
@@ -197,7 +197,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("GetPropertyField", groupID, "existing-programs-id").Return(existingField, nil)
 
 		// UpdatePropertyField should NOT be called (no new options)
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Equal(t, "existing-programs-id", mapping["programs"])
@@ -236,7 +236,7 @@ func TestSyncFields(t *testing.T) {
 		// Mock logging (will log error for department failure)
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		// Should not return error (graceful degradation)
 		require.NoError(t, err)
@@ -253,7 +253,7 @@ func TestSyncFields(t *testing.T) {
 
 		users := []map[string]interface{}{}
 
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Empty(t, mapping)
@@ -283,7 +283,7 @@ func TestSyncFields(t *testing.T) {
 
 		cache.On("SaveFieldMapping", "location", "loc-id").Return(nil)
 
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 2)
@@ -305,7 +305,7 @@ func TestSyncFields(t *testing.T) {
 
 		cache.On("GetFieldID", "department").Return("dept-id", nil)
 
-		mapping, err := syncFields(client, groupID, users, cache)
+		mapping, err := SyncFields(client, groupID, users, cache)
 
 		require.NoError(t, err)
 		assert.Len(t, mapping, 1)

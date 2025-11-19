@@ -297,7 +297,9 @@ func mergeOptions(existingOptions []map[string]interface{}, newValues []string) 
 // Returns:
 //   - Map of field name → field ID for all successfully synced fields
 //   - Error only if catastrophic failure (returned map may be partial on field-level errors)
-func syncFields(
+//
+//nolint:revive // SyncFields is the conventional name for this orchestrator function
+func SyncFields(
 	client *pluginapi.Client,
 	groupID string,
 	users []map[string]interface{},

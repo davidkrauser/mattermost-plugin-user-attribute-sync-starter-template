@@ -31,9 +31,7 @@ const customProfileAttributesGroupName = "custom_profile_attributes"
 // Returns:
 //   - The Custom Profile Attributes group ID
 //   - Error if the group cannot be retrieved or registered
-//
-//nolint:unused // Will be used in Phase 4.7
-func getOrRegisterCPAGroup(client *pluginapi.Client) (string, error) {
+func GetOrRegisterCPAGroup(client *pluginapi.Client) (string, error) {
 	// First, try to get the existing group
 	group, err := client.Property.GetPropertyGroup(customProfileAttributesGroupName)
 	if err == nil && group != nil {

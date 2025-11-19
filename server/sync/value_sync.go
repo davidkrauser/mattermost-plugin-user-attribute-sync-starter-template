@@ -189,7 +189,7 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 	return values, nil
 }
 
-// syncUsers synchronizes attribute values for all users from external data.
+// SyncUsers synchronizes attribute values for all users from external data.
 //
 // This is the main orchestrator for value synchronization. It processes each user
 // independently, ensuring that failures for individual users don't block the entire
@@ -217,7 +217,9 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 //
 // This partial failure handling ensures progress even when some users have data
 // quality issues or have been removed from Mattermost.
-func syncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache FieldCache) error {
+//
+//nolint:revive // SyncUsers is the conventional name for this orchestrator function
+func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache FieldCache) error {
 	for _, userAttrs := range users {
 		// Extract email for user resolution
 		email, ok := userAttrs["email"].(string)

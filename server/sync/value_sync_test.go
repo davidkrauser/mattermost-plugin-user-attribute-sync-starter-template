@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
+	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -174,6 +177,189 @@ func TestFormatMultiselectValue(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Oranges")
 		assert.Contains(t, err.Error(), "not found")
+
+		cache.AssertExpectations(t)
+	})
+}
+
+func TestBuildPropertyValues(t *testing.T) {
+	groupID := "test-group-id"
+	user := &model.User{
+		Id:    "user123",
+		Email: "test@example.com",
+	}
+
+	t.Run("builds values for all field types", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+		cache.On("GetFieldID", "start_date").Return("field_date", nil)
+		cache.On("GetFieldID", "programs").Return("field_prog", nil)
+		cache.On("GetOptionID", "programs", "Apples").Return("opt_apple", nil)
+		cache.On("GetOptionID", "programs", "Oranges").Return("opt_orange", nil)
+
+		userAttrs := map[string]interface{}{
+			"email":      "test@example.com", // Should be skipped
+			"department": "Engineering",
+			"start_date": "2023-01-15",
+			"programs":   []interface{}{"Apples", "Oranges"},
+		}
+
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 3) // email excluded
+
+		// Verify all values have correct structure
+		for _, v := range values {
+			assert.Equal(t, groupID, v.GroupID)
+			assert.Equal(t, "user", v.TargetType)
+			assert.Equal(t, user.Id, v.TargetID)
+			assert.NotEmpty(t, v.FieldID)
+			assert.NotEmpty(t, v.Value)
+		}
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("handles string array for multiselect", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "tags").Return("field_tags", nil)
+		cache.On("GetOptionID", "tags", "Tag1").Return("opt_tag1", nil)
+		cache.On("GetOptionID", "tags", "Tag2").Return("opt_tag2", nil)
+
+		userAttrs := map[string]interface{}{
+			"email": "test@example.com",
+			"tags":  []string{"Tag1", "Tag2"},
+		}
+
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 1)
+
+		// Verify multiselect was formatted correctly
+		var optionIDs []string
+		err = json.Unmarshal(values[0].Value, &optionIDs)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"opt_tag1", "opt_tag2"}, optionIDs)
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("skips email field", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+
+		userAttrs := map[string]interface{}{
+			"email": "test@example.com",
+		}
+
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 0)
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("skips field with missing field ID", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "unknown_field").Return("", assert.AnError)
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+
+		// Expect log warning for unknown field
+		api.On("LogWarn", "Failed to get field ID, skipping field",
+			"field_name", "unknown_field",
+			"user_email", "test@example.com",
+			"error", assert.AnError.Error())
+
+		userAttrs := map[string]interface{}{
+			"email":         "test@example.com",
+			"unknown_field": "value",
+			"department":    "Engineering",
+		}
+
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 1) // Only department
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("skips field with unsupported type", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "bad_field").Return("field_bad", nil)
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+
+		// Expect log warning for unsupported type
+		api.On("LogWarn", "Unsupported field value type, skipping field",
+			"field_name", "bad_field",
+			"user_email", "test@example.com",
+			"value_type", "int")
+
+		userAttrs := map[string]interface{}{
+			"email":      "test@example.com",
+			"bad_field":  123, // Unsupported type
+			"department": "Engineering",
+		}
+
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 1) // Only department
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("skips field with format error", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+		cache.On("GetFieldID", "programs").Return("field_prog", nil)
+		cache.On("GetOptionID", "programs", "InvalidOption").Return("", assert.AnError)
+		cache.On("GetFieldID", "department").Return("field_dept", nil)
+
+		// Expect log warning for format error
+		api.On("LogWarn", "Failed to format field value, skipping field",
+			"field_name", "programs",
+			"user_email", "test@example.com",
+			"error", "failed to get option ID for programs.InvalidOption: assert.AnError general error for testing")
+
+		userAttrs := map[string]interface{}{
+			"email":      "test@example.com",
+			"programs":   []string{"InvalidOption"},
+			"department": "Engineering",
+		}
+
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 1) // Only department
+
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("handles empty attributes", func(t *testing.T) {
+		api := &plugintest.API{}
+		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		cache := &mockFieldCache{}
+
+		userAttrs := map[string]interface{}{}
+
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		require.NoError(t, err)
+		assert.Len(t, values, 0)
 
 		cache.AssertExpectations(t)
 	})

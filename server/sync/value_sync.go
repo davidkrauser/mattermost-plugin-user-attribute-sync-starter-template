@@ -3,6 +3,9 @@ package sync
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/mattermost/mattermost/server/public/pluginapi"
 )
 
 // formatStringValue formats text and date field values for PropertyService.
@@ -86,4 +89,102 @@ func formatMultiselectValue(cache FieldCache, fieldName string, values []string)
 	}
 
 	return json.RawMessage(marshaled), nil
+}
+
+// buildPropertyValues constructs PropertyValue objects for all attributes of a user.
+//
+// This function prepares a batch of PropertyValues for a single user, ready to be
+// upserted to Mattermost via the PropertyService API. It handles all three field types
+// (text, date, multiselect) by inferring the type from the value structure.
+//
+// The function skips the "email" field (used for user resolution only, not synced as
+// an attribute) and continues processing even if individual fields fail, collecting
+// errors for reporting.
+//
+// Args:
+//   - api: Mattermost API client for logging
+//   - user: The Mattermost user to build values for
+//   - groupID: Property group ID (custom_profile_attributes)
+//   - userAttrs: Map of attribute names to values from external system
+//   - cache: FieldCache for looking up field IDs and option IDs
+//
+// Returns:
+//   - Array of PropertyValue objects ready for bulk upsert
+//   - Error if critical failure occurs (individual field failures are logged and skipped)
+//
+// Type inference (matches field creation logic):
+//   - []string value → multiselect (convert option names to IDs)
+//   - string matching YYYY-MM-DD → date (JSON-encode as string)
+//   - other string → text (JSON-encode as string)
+func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string, userAttrs map[string]interface{}, cache FieldCache) ([]*model.PropertyValue, error) {
+	values := make([]*model.PropertyValue, 0, len(userAttrs))
+
+	for fieldName, fieldValue := range userAttrs {
+		// Skip email field (used for user resolution only)
+		if fieldName == "email" {
+			continue
+		}
+
+		// Look up field ID from cache
+		fieldID, err := cache.GetFieldID(fieldName)
+		if err != nil {
+			api.Log.Warn("Failed to get field ID, skipping field",
+				"field_name", fieldName,
+				"user_email", user.Email,
+				"error", err.Error())
+			continue
+		}
+
+		// Infer type and format value
+		var formattedValue json.RawMessage
+		var formatErr error
+
+		switch v := fieldValue.(type) {
+		case []interface{}:
+			// Multiselect field - convert interface{} array to string array
+			stringValues := make([]string, 0, len(v))
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					stringValues = append(stringValues, str)
+				}
+			}
+			formattedValue, formatErr = formatMultiselectValue(cache, fieldName, stringValues)
+
+		case []string:
+			// Multiselect field - already string array
+			formattedValue, formatErr = formatMultiselectValue(cache, fieldName, v)
+
+		case string:
+			// Text or date field
+			formattedValue, formatErr = formatStringValue(v)
+
+		default:
+			api.Log.Warn("Unsupported field value type, skipping field",
+				"field_name", fieldName,
+				"user_email", user.Email,
+				"value_type", fmt.Sprintf("%T", fieldValue))
+			continue
+		}
+
+		if formatErr != nil {
+			api.Log.Warn("Failed to format field value, skipping field",
+				"field_name", fieldName,
+				"user_email", user.Email,
+				"error", formatErr.Error())
+			continue
+		}
+
+		// Build PropertyValue
+		propertyValue := &model.PropertyValue{
+			GroupID:    groupID,
+			TargetType: "user",
+			TargetID:   user.Id,
+			FieldID:    fieldID,
+			Value:      formattedValue,
+		}
+
+		values = append(values, propertyValue)
+	}
+
+	return values, nil
 }

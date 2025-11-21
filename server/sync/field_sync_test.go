@@ -45,9 +45,6 @@ func TestSyncFields(t *testing.T) {
 			return f.Name == "Programs" && f.ID == ""
 		})).Return(programsField, nil)
 
-		// Mock GetPropertyField to return the Programs field with options (for option ID extraction)
-		api.On("GetPropertyField", groupID, "generated_id_2").Return(programsField, nil).Once()
-
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.Name == "Start Date" && f.ID == ""
 		})).Return(&model.PropertyField{ID: "generated_id_3", Name: "Start Date", Type: model.PropertyFieldTypeDate}, nil)
@@ -103,7 +100,6 @@ func TestSyncFields(t *testing.T) {
 		api.On("UpdatePropertyField", groupID, mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.ID == "existing_id_2"
 		})).Return(existingPrograms, nil).Once()
-		api.On("GetPropertyField", groupID, "existing_id_2").Return(existingPrograms, nil).Once()
 
 		existingStartDate := &model.PropertyField{
 			ID:      "existing_id_3",
@@ -162,18 +158,6 @@ func TestSyncFields(t *testing.T) {
 			return f, nil
 		})
 
-		// Mock GetPropertyField for Programs field (for option extraction)
-		api.On("GetPropertyField", groupID, "gen_id_Programs").Return(&model.PropertyField{
-			ID: "gen_id_Programs",
-			Attrs: model.StringInterface{
-				model.PropertyFieldAttributeOptions: []interface{}{
-					map[string]interface{}{"id": "opt1", "name": "Apples"},
-					map[string]interface{}{"id": "opt2", "name": "Oranges"},
-					map[string]interface{}{"id": "opt3", "name": "Lemons"},
-				},
-			},
-		}, nil).Maybe()
-
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
@@ -209,16 +193,6 @@ func TestSyncFields(t *testing.T) {
 			}
 			return f, nil
 		})
-
-		// Mock GetPropertyField for Programs field
-		api.On("GetPropertyField", groupID, mock.Anything).Return(&model.PropertyField{
-			ID: "generated_id_Programs",
-			Attrs: model.StringInterface{
-				model.PropertyFieldAttributeOptions: []interface{}{
-					map[string]interface{}{"id": "opt1", "name": "Apples"},
-				},
-			},
-		}, nil).Maybe()
 
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()

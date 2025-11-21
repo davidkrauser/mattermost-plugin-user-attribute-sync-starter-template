@@ -58,13 +58,13 @@ var fieldDefinitions = []fieldDefinition{
 }
 
 // updateField updates an existing CPA field to match the definition.
-// Returns the updated field's ID.
+// Returns the updated field.
 func updateField(
 	client *pluginapi.Client,
 	groupID string,
 	existingField *model.PropertyField,
 	def fieldDefinition,
-) (string, error) {
+) (*model.PropertyField, error) {
 	client.Log.Info("Field exists, updating to match definition",
 		"field_id", existingField.ID,
 		"name", def.Name)
@@ -84,22 +84,22 @@ func updateField(
 		existingField.Attrs[model.PropertyFieldAttributeOptions] = options
 	}
 
-	_, err := client.Property.UpdatePropertyField(groupID, existingField)
+	updatedField, err := client.Property.UpdatePropertyField(groupID, existingField)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to update existing field %s", def.Name)
+		return nil, errors.Wrapf(err, "failed to update existing field %s", def.Name)
 	}
 
-	client.Log.Info("Updated field successfully", "field_id", existingField.ID, "name", def.Name)
-	return existingField.ID, nil
+	client.Log.Info("Updated field successfully", "field_id", updatedField.ID, "name", def.Name)
+	return updatedField, nil
 }
 
 // createField creates a new CPA field from the definition.
-// Returns the newly created field's ID.
+// Returns the newly created field.
 func createField(
 	client *pluginapi.Client,
 	groupID string,
 	def fieldDefinition,
-) (string, error) {
+) (*model.PropertyField, error) {
 	client.Log.Info("Field does not exist, creating", "name", def.Name)
 
 	field := &model.PropertyField{
@@ -129,11 +129,11 @@ func createField(
 
 	createdField, err := client.Property.CreatePropertyField(field)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to create field %s", def.Name)
+		return nil, errors.Wrapf(err, "failed to create field %s", def.Name)
 	}
 
 	client.Log.Info("Created field successfully", "field_id", createdField.ID, "name", def.Name)
-	return createdField.ID, nil
+	return createdField, nil
 }
 
 // syncSingleField ensures a single CPA field exists and matches the definition.
@@ -147,53 +147,46 @@ func syncSingleField(
 	// Try to get existing field
 	existingField, err := client.Property.GetPropertyFieldByName(groupID, "", def.Name)
 
-	var fieldID string
+	var field *model.PropertyField
 	if err == nil && existingField != nil {
 		// Field exists - update it
-		fieldID, err = updateField(client, groupID, existingField, def)
+		field, err = updateField(client, groupID, existingField, def)
 		if err != nil {
 			return "", err
 		}
 	} else {
 		// Field doesn't exist - create it
-		fieldID, err = createField(client, groupID, def)
+		field, err = createField(client, groupID, def)
 		if err != nil {
 			return "", err
 		}
 	}
 
 	// Store the field name to ID mapping
-	cache.FieldNameToID[def.ExternalName] = fieldID
+	cache.FieldNameToID[def.ExternalName] = field.ID
 
 	// For multiselect fields, extract option IDs
 	if def.Type == model.PropertyFieldTypeMultiselect && len(def.OptionNames) > 0 {
-		if err := extractOptionIDs(client, groupID, fieldID, def, cache); err != nil {
+		if err := extractOptionIDs(client, field, def, cache); err != nil {
 			client.Log.Error("Failed to extract option IDs",
 				"name", def.Name,
-				"field_id", fieldID,
+				"field_id", field.ID,
 				"error", err.Error())
 			// Don't fail the entire sync, just log the error
 		}
 	}
 
-	return fieldID, nil
+	return field.ID, nil
 }
 
-// extractOptionIDs retrieves a multiselect field and extracts option IDs into the cache.
+// extractOptionIDs extracts option IDs from a multiselect field into the cache.
 // Avoids adding duplicate options with the same name.
 func extractOptionIDs(
 	client *pluginapi.Client,
-	groupID string,
-	fieldID string,
+	field *model.PropertyField,
 	def fieldDefinition,
 	cache *FieldIDCache,
 ) error {
-	// Look up the field to get the option IDs that Mattermost generated
-	field, err := client.Property.GetPropertyField(groupID, fieldID)
-	if err != nil {
-		return errors.Wrapf(err, "failed to get field for option extraction")
-	}
-
 	// Extract option IDs from the field attributes
 	optionsRaw, ok := field.Attrs[model.PropertyFieldAttributeOptions]
 	if !ok {

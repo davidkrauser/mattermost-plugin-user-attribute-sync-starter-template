@@ -81,6 +81,42 @@ func createOrUpdateField(
 	groupID string,
 	def fieldDefinition,
 ) error {
+	// Check if field already exists
+	existingField, err := client.Property.GetPropertyField(groupID, def.ID)
+
+	if err == nil && existingField != nil {
+		// Field exists - update it to match our definition
+		client.Log.Info("Field exists, updating to match definition",
+			"field_id", def.ID,
+			"name", def.Name)
+
+		existingField.Name = def.Name
+		existingField.Type = def.Type
+		existingField.Attrs[model.CustomProfileAttributesPropertyAttrsVisibility] = model.CustomProfileAttributesVisibilityHidden
+		existingField.Attrs[model.CustomProfileAttributesPropertyAttrsManaged] = "admin"
+
+		if def.Type == model.PropertyFieldTypeMultiselect {
+			options := make([]interface{}, len(def.Options))
+			for i, opt := range def.Options {
+				options[i] = opt
+			}
+			existingField.Attrs[model.PropertyFieldAttributeOptions] = options
+		}
+
+		_, updateErr := client.Property.UpdatePropertyField(groupID, existingField)
+		if updateErr != nil {
+			return errors.Wrapf(updateErr, "failed to update existing field %s", def.ID)
+		}
+
+		client.Log.Info("Updated field successfully", "field_id", def.ID, "name", def.Name)
+		return nil
+	}
+
+	// Field doesn't exist - create it
+	client.Log.Info("Field does not exist, creating",
+		"field_id", def.ID,
+		"name", def.Name)
+
 	field := &model.PropertyField{
 		ID:      def.ID,
 		GroupID: groupID,
@@ -103,49 +139,12 @@ func createOrUpdateField(
 		field.Attrs[model.PropertyFieldAttributeOptions] = options
 	}
 
-	_, err := client.Property.CreatePropertyField(field)
-	if err == nil {
-		client.Log.Info("Created field successfully", "field_id", def.ID, "name", def.Name)
-		return nil
+	_, createErr := client.Property.CreatePropertyField(field)
+	if createErr != nil {
+		return errors.Wrapf(createErr, "failed to create field %s", def.ID)
 	}
 
-	client.Log.Debug("Field creation returned error, checking if field exists",
-		"field_id", def.ID,
-		"error", err.Error())
-
-	// If creation failed, try to retrieve and update the existing field
-	existingField, getErr := client.Property.GetPropertyField(groupID, def.ID)
-	if getErr != nil {
-		return errors.Wrapf(err, "failed to create field %s and it doesn't exist", def.ID)
-	}
-
-	if existingField == nil {
-		return errors.Wrapf(err, "failed to create field %s and retrieval returned nil", def.ID)
-	}
-
-	client.Log.Info("Field already exists, updating to match definition",
-		"field_id", def.ID,
-		"name", def.Name)
-
-	existingField.Name = def.Name
-	existingField.Type = def.Type
-	existingField.Attrs[model.CustomProfileAttributesPropertyAttrsVisibility] = model.CustomProfileAttributesVisibilityHidden
-	existingField.Attrs[model.CustomProfileAttributesPropertyAttrsManaged] = "admin"
-
-	if def.Type == model.PropertyFieldTypeMultiselect {
-		options := make([]interface{}, len(def.Options))
-		for i, opt := range def.Options {
-			options[i] = opt
-		}
-		existingField.Attrs[model.PropertyFieldAttributeOptions] = options
-	}
-
-	_, updateErr := client.Property.UpdatePropertyField(groupID, existingField)
-	if updateErr != nil {
-		return errors.Wrapf(updateErr, "failed to update existing field %s", def.ID)
-	}
-
-	client.Log.Info("Updated field successfully", "field_id", def.ID, "name", def.Name)
+	client.Log.Info("Created field successfully", "field_id", def.ID, "name", def.Name)
 	return nil
 }
 

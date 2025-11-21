@@ -19,6 +19,11 @@ func TestSyncFields(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
+		// Mock GetPropertyField returning not found (fields don't exist yet)
+		api.On("GetPropertyField", groupID, FieldIDJobTitle).Return(nil, errors.New("not found")).Once()
+		api.On("GetPropertyField", groupID, FieldIDPrograms).Return(nil, errors.New("not found")).Once()
+		api.On("GetPropertyField", groupID, FieldIDStartDate).Return(nil, errors.New("not found")).Once()
+
 		// Mock field creation for each hardcoded field
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
 			return f.ID == FieldIDJobTitle
@@ -45,9 +50,6 @@ func TestSyncFields(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		// Simulate fields already existing (creation returns error)
-		api.On("CreatePropertyField", mock.Anything).Return(nil, errors.New("duplicate key"))
-
 		// Mock GetPropertyField for each field (simulating they exist)
 		for _, def := range fieldDefinitions {
 			existingField := &model.PropertyField{
@@ -64,7 +66,6 @@ func TestSyncFields(t *testing.T) {
 		}
 
 		// Mock logging
-		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		err := SyncFields(client, groupID)
@@ -76,6 +77,9 @@ func TestSyncFields(t *testing.T) {
 	t.Run("multiselect field includes options", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
+
+		// Mock GetPropertyField returning not found for all fields
+		api.On("GetPropertyField", groupID, mock.Anything).Return(nil, errors.New("not found"))
 
 		// Mock field creation - verify Programs field has options
 		api.On("CreatePropertyField", mock.MatchedBy(func(f *model.PropertyField) bool {
@@ -107,11 +111,18 @@ func TestSyncFields(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		callCount := 0
-		// First field fails, others succeed
+		getCallCount := 0
+		// Mock GetPropertyField - all fields don't exist
+		api.On("GetPropertyField", groupID, mock.Anything).Return(func(groupID string, fieldID string) (*model.PropertyField, error) {
+			getCallCount++
+			return nil, errors.New("not found")
+		})
+
+		createCallCount := 0
+		// First field creation fails, others succeed
 		api.On("CreatePropertyField", mock.Anything).Return(func(f *model.PropertyField) (*model.PropertyField, error) {
-			callCount++
-			if callCount == 1 {
+			createCallCount++
+			if createCallCount == 1 {
 				// First call fails
 				return nil, errors.New("API error")
 			}
@@ -119,12 +130,8 @@ func TestSyncFields(t *testing.T) {
 			return f, nil
 		})
 
-		// Mock GetPropertyField for the failed field (doesn't exist)
-		api.On("GetPropertyField", groupID, mock.Anything).Return(nil, errors.New("not found")).Once()
-
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 

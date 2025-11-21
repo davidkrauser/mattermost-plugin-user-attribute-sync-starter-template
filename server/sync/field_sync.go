@@ -228,7 +228,7 @@ func extractOptionIDs(
 // SyncFields ensures all CPA fields exist and match the definitions.
 // Returns a FieldIDCache containing mappings from external names to Mattermost-generated IDs.
 //
-//nolint:revive // SyncFields is the conventional name for this orchestrator function
+//nolint:revive
 func SyncFields(client *pluginapi.Client, groupID string) (*FieldIDCache, error) {
 	client.Log.Info("Syncing field definitions", "field_count", len(fieldDefinitions))
 

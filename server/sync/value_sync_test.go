@@ -20,7 +20,7 @@ func testFieldIDCache() *FieldIDCache {
 			"programs":   "test_field_id_2",
 			"start_date": "test_field_id_3",
 		},
-		ProgramOptionNameToID: map[string]string{
+		OptionNameToID: map[string]string{
 			"Apples":  "test_opt_id_apples",
 			"Oranges": "test_opt_id_oranges",
 			"Lemons":  "test_opt_id_lemons",
@@ -153,13 +153,15 @@ func TestFormatMultiselectValue(t *testing.T) {
 	t.Run("unknown option returns error", func(t *testing.T) {
 		_, err := formatMultiselectValue("programs", []string{"UnknownProgram"}, cache)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unknown program option")
+		assert.Contains(t, err.Error(), "unknown option")
+		assert.Contains(t, err.Error(), "UnknownProgram")
 	})
 
-	t.Run("unexpected multiselect field returns error", func(t *testing.T) {
+	t.Run("unknown option for any field returns error", func(t *testing.T) {
 		_, err := formatMultiselectValue("not_programs", []string{"Value1"}, cache)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unexpected multiselect field")
+		assert.Contains(t, err.Error(), "unknown option")
+		assert.Contains(t, err.Error(), "Value1")
 	})
 }
 

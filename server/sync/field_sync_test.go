@@ -54,7 +54,7 @@ func TestSyncFields(t *testing.T) {
 
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		cache, err := SyncFields(client, groupID)
 
@@ -63,9 +63,9 @@ func TestSyncFields(t *testing.T) {
 		assert.Equal(t, "generated_id_1", cache.GetFieldID("job_title"))
 		assert.Equal(t, "generated_id_2", cache.GetFieldID("programs"))
 		assert.Equal(t, "generated_id_3", cache.GetFieldID("start_date"))
-		assert.Equal(t, "opt_id_1", cache.GetProgramOptionID("Apples"))
-		assert.Equal(t, "opt_id_2", cache.GetProgramOptionID("Oranges"))
-		assert.Equal(t, "opt_id_3", cache.GetProgramOptionID("Lemons"))
+		assert.Equal(t, "opt_id_1", cache.GetOptionID("Apples"))
+		assert.Equal(t, "opt_id_2", cache.GetOptionID("Oranges"))
+		assert.Equal(t, "opt_id_3", cache.GetOptionID("Lemons"))
 		api.AssertExpectations(t)
 	})
 
@@ -119,7 +119,7 @@ func TestSyncFields(t *testing.T) {
 
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		cache, err := SyncFields(client, groupID)
 
@@ -176,7 +176,7 @@ func TestSyncFields(t *testing.T) {
 
 		// Mock logging
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		cache, err := SyncFields(client, groupID)
 
@@ -224,7 +224,7 @@ func TestSyncFields(t *testing.T) {
 		api.On("LogInfo", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
-		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything).Maybe()
+		api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 
 		cache, err := SyncFields(client, groupID)
 
@@ -255,23 +255,23 @@ func TestFieldIDCache(t *testing.T) {
 		assert.Equal(t, "", cache.GetFieldID("unknown_field"))
 	})
 
-	t.Run("GetProgramOptionID returns correct option IDs", func(t *testing.T) {
+	t.Run("GetOptionID returns correct option IDs", func(t *testing.T) {
 		cache := &FieldIDCache{
-			ProgramOptionNameToID: map[string]string{
+			OptionNameToID: map[string]string{
 				"Apples":  "opt1",
 				"Oranges": "opt2",
 				"Lemons":  "opt3",
 			},
 		}
-		assert.Equal(t, "opt1", cache.GetProgramOptionID("Apples"))
-		assert.Equal(t, "opt2", cache.GetProgramOptionID("Oranges"))
-		assert.Equal(t, "opt3", cache.GetProgramOptionID("Lemons"))
+		assert.Equal(t, "opt1", cache.GetOptionID("Apples"))
+		assert.Equal(t, "opt2", cache.GetOptionID("Oranges"))
+		assert.Equal(t, "opt3", cache.GetOptionID("Lemons"))
 	})
 
-	t.Run("GetProgramOptionID returns empty string for unknown option", func(t *testing.T) {
+	t.Run("GetOptionID returns empty string for unknown option", func(t *testing.T) {
 		cache := &FieldIDCache{
-			ProgramOptionNameToID: make(map[string]string),
+			OptionNameToID: make(map[string]string),
 		}
-		assert.Equal(t, "", cache.GetProgramOptionID("Unknown"))
+		assert.Equal(t, "", cache.GetOptionID("Unknown"))
 	})
 }

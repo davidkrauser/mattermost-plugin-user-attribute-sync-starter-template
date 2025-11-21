@@ -20,17 +20,14 @@ func formatStringValue(value string) (json.RawMessage, error) {
 
 // formatMultiselectValue converts multiselect option names to option IDs in JSON format.
 // Multiselect fields store arrays of option IDs, not human-readable names.
+// Works with any multiselect field that has options in the cache.
 func formatMultiselectValue(fieldName string, values []string, cache *FieldIDCache) (json.RawMessage, error) {
-	if fieldName != "programs" {
-		return nil, fmt.Errorf("unexpected multiselect field: %s", fieldName)
-	}
-
 	// Translate option names to IDs
 	optionIDs := make([]string, 0, len(values))
 	for _, optionName := range values {
-		optionID := cache.GetProgramOptionID(optionName)
+		optionID := cache.GetOptionID(optionName)
 		if optionID == "" {
-			return nil, fmt.Errorf("unknown program option: %s", optionName)
+			return nil, fmt.Errorf("unknown option %q for field %s", optionName, fieldName)
 		}
 		optionIDs = append(optionIDs, optionID)
 	}

@@ -63,8 +63,8 @@ func (p *Plugin) runSync() {
 
 	p.client.Log.Info("Fetched users for sync", "count", len(users))
 
-	// Sync user values
-	err = sync.SyncUsers(p.client, p.cpaGroupID, users)
+	// Sync user values using the field ID cache loaded during activation
+	err = sync.SyncUsers(p.client, p.cpaGroupID, users, p.fieldIDCache)
 	if err != nil {
 		p.client.Log.Error("Failed to sync user values", "error", err.Error())
 		return

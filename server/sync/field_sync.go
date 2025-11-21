@@ -1,42 +1,38 @@
 package sync
 
 import (
+	"encoding/json"
+
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/pkg/errors"
 )
 
-// Field and option IDs that this plugin manages in Mattermost's Custom Profile Attributes system.
-const (
-	FieldIDJobTitle  = "field_job_title"
-	FieldIDPrograms  = "field_programs"
-	FieldIDStartDate = "field_start_date"
-
-	OptionIDApples  = "option_apples"
-	OptionIDOranges = "option_oranges"
-	OptionIDLemons  = "option_lemons"
-)
-
-// fieldNameToID translates external system field names to Mattermost field IDs.
-var fieldNameToID = map[string]string{
-	"job_title":  FieldIDJobTitle,
-	"programs":   FieldIDPrograms,
-	"start_date": FieldIDStartDate,
+// FieldIDCache stores mappings from external field/option names to Mattermost-generated IDs.
+// These IDs are dynamically loaded during plugin activation by creating fields and looking up their IDs.
+type FieldIDCache struct {
+	// Maps external field names (e.g., "job_title") to Mattermost field IDs
+	FieldNameToID map[string]string
+	// Maps external option names (e.g., "Apples") to Mattermost option IDs for the "programs" field
+	ProgramOptionNameToID map[string]string
 }
 
-// programOptionNameToID translates external multiselect option names to Mattermost option IDs.
-var programOptionNameToID = map[string]string{
-	"Apples":  OptionIDApples,
-	"Oranges": OptionIDOranges,
-	"Lemons":  OptionIDLemons,
+// GetFieldID translates an external field name to its Mattermost field ID.
+func (c *FieldIDCache) GetFieldID(fieldName string) string {
+	return c.FieldNameToID[fieldName]
+}
+
+// GetProgramOptionID translates an external multiselect option name to its Mattermost option ID.
+func (c *FieldIDCache) GetProgramOptionID(optionName string) string {
+	return c.ProgramOptionNameToID[optionName]
 }
 
 // fieldDefinition defines a Custom Profile Attribute field schema.
 type fieldDefinition struct {
-	ID      string
-	Name    string
-	Type    model.PropertyFieldType
-	Options []map[string]interface{} // For multiselect fields only
+	Name           string                   // Display name shown in UI
+	ExternalName   string                   // Name used in external data source
+	Type           model.PropertyFieldType  // Field type (text, date, multiselect, etc.)
+	OptionNames    []string                 // Option names for multiselect fields
 }
 
 // fieldDefinitions contains all Custom Profile Attribute fields this plugin creates.
@@ -44,81 +40,68 @@ type fieldDefinition struct {
 // This plugin ensures these fields exist on startup and syncs external data into them.
 var fieldDefinitions = []fieldDefinition{
 	{
-		ID:   FieldIDJobTitle,
-		Name: "Job Title",
-		Type: model.PropertyFieldTypeText,
+		Name:         "Job Title",
+		ExternalName: "job_title",
+		Type:         model.PropertyFieldTypeText,
 	},
 	{
-		ID:   FieldIDPrograms,
-		Name: "Programs",
-		Type: model.PropertyFieldTypeMultiselect,
-		Options: []map[string]interface{}{
-			{"id": OptionIDApples, "name": "Apples"},
-			{"id": OptionIDOranges, "name": "Oranges"},
-			{"id": OptionIDLemons, "name": "Lemons"},
-		},
+		Name:         "Programs",
+		ExternalName: "programs",
+		Type:         model.PropertyFieldTypeMultiselect,
+		OptionNames:  []string{"Apples", "Oranges", "Lemons"},
 	},
 	{
-		ID:   FieldIDStartDate,
-		Name: "Start Date",
-		Type: model.PropertyFieldTypeDate,
+		Name:         "Start Date",
+		ExternalName: "start_date",
+		Type:         model.PropertyFieldTypeDate,
 	},
 }
 
-// GetFieldID translates an external field name to its Mattermost field ID.
-func GetFieldID(fieldName string) string {
-	return fieldNameToID[fieldName]
-}
-
-// GetProgramOptionID translates an external multiselect option name to its Mattermost option ID.
-func GetProgramOptionID(optionName string) string {
-	return programOptionNameToID[optionName]
-}
-
-// createOrUpdateField ensures a CPA field exists and matches the hardcoded definition.
+// createOrUpdateField ensures a CPA field exists and matches the definition.
+// Returns the field ID (either existing or newly created).
 func createOrUpdateField(
 	client *pluginapi.Client,
 	groupID string,
 	def fieldDefinition,
-) error {
-	// Check if field already exists
-	existingField, err := client.Property.GetPropertyField(groupID, def.ID)
+) (string, error) {
+	// Check if field already exists by looking it up by name
+	existingField, err := client.Property.GetPropertyFieldByName(groupID, "", def.Name)
 
 	if err == nil && existingField != nil {
 		// Field exists - update it to match our definition
 		client.Log.Info("Field exists, updating to match definition",
-			"field_id", def.ID,
+			"field_id", existingField.ID,
 			"name", def.Name)
 
-		existingField.Name = def.Name
 		existingField.Type = def.Type
 		existingField.Attrs[model.CustomProfileAttributesPropertyAttrsVisibility] = model.CustomProfileAttributesVisibilityHidden
 		existingField.Attrs[model.CustomProfileAttributesPropertyAttrsManaged] = "admin"
 
 		if def.Type == model.PropertyFieldTypeMultiselect {
-			options := make([]interface{}, len(def.Options))
-			for i, opt := range def.Options {
-				options[i] = opt
+			// Build options array with name only - Mattermost will generate IDs
+			options := make([]interface{}, len(def.OptionNames))
+			for i, optionName := range def.OptionNames {
+				options[i] = map[string]interface{}{
+					"name": optionName,
+				}
 			}
 			existingField.Attrs[model.PropertyFieldAttributeOptions] = options
 		}
 
 		_, updateErr := client.Property.UpdatePropertyField(groupID, existingField)
 		if updateErr != nil {
-			return errors.Wrapf(updateErr, "failed to update existing field %s", def.ID)
+			return "", errors.Wrapf(updateErr, "failed to update existing field %s", def.Name)
 		}
 
-		client.Log.Info("Updated field successfully", "field_id", def.ID, "name", def.Name)
-		return nil
+		client.Log.Info("Updated field successfully", "field_id", existingField.ID, "name", def.Name)
+		return existingField.ID, nil
 	}
 
 	// Field doesn't exist - create it
-	client.Log.Info("Field does not exist, creating",
-		"field_id", def.ID,
-		"name", def.Name)
+	client.Log.Info("Field does not exist, creating", "name", def.Name)
 
 	field := &model.PropertyField{
-		ID:      def.ID,
+		// ID left empty - Mattermost will auto-generate
 		GroupID: groupID,
 		Name:    def.Name,
 		Type:    def.Type,
@@ -132,38 +115,97 @@ func createOrUpdateField(
 
 	// Multiselect fields need their options defined
 	if def.Type == model.PropertyFieldTypeMultiselect {
-		options := make([]interface{}, len(def.Options))
-		for i, opt := range def.Options {
-			options[i] = opt
+		// Build options array with name only - Mattermost will generate IDs
+		options := make([]interface{}, len(def.OptionNames))
+		for i, optionName := range def.OptionNames {
+			options[i] = map[string]interface{}{
+				"name": optionName,
+			}
 		}
 		field.Attrs[model.PropertyFieldAttributeOptions] = options
 	}
 
-	_, createErr := client.Property.CreatePropertyField(field)
+	createdField, createErr := client.Property.CreatePropertyField(field)
 	if createErr != nil {
-		return errors.Wrapf(createErr, "failed to create field %s", def.ID)
+		return "", errors.Wrapf(createErr, "failed to create field %s", def.Name)
 	}
 
-	client.Log.Info("Created field successfully", "field_id", def.ID, "name", def.Name)
-	return nil
+	client.Log.Info("Created field successfully", "field_id", createdField.ID, "name", def.Name)
+	return createdField.ID, nil
 }
 
-// SyncFields ensures all CPA fields exist and match the hardcoded definitions.
+// SyncFields ensures all CPA fields exist and match the definitions.
+// Returns a FieldIDCache containing mappings from external names to Mattermost-generated IDs.
 //
 //nolint:revive // SyncFields is the conventional name for this orchestrator function
-func SyncFields(client *pluginapi.Client, groupID string) error {
-	client.Log.Info("Syncing hardcoded field definitions", "field_count", len(fieldDefinitions))
+func SyncFields(client *pluginapi.Client, groupID string) (*FieldIDCache, error) {
+	client.Log.Info("Syncing field definitions", "field_count", len(fieldDefinitions))
+
+	cache := &FieldIDCache{
+		FieldNameToID:         make(map[string]string),
+		ProgramOptionNameToID: make(map[string]string),
+	}
 
 	var failedFields []string
 
 	for _, def := range fieldDefinitions {
-		if err := createOrUpdateField(client, groupID, def); err != nil {
+		fieldID, err := createOrUpdateField(client, groupID, def)
+		if err != nil {
 			client.Log.Error("Failed to create or update field",
-				"field_id", def.ID,
 				"name", def.Name,
 				"error", err.Error())
-			failedFields = append(failedFields, def.ID)
+			failedFields = append(failedFields, def.Name)
 			// Continue with next field for graceful degradation
+			continue
+		}
+
+		// Store the field name to ID mapping
+		cache.FieldNameToID[def.ExternalName] = fieldID
+
+		// For multiselect fields, extract option IDs
+		if def.Type == model.PropertyFieldTypeMultiselect && len(def.OptionNames) > 0 {
+			// Look up the field again to get the option IDs that Mattermost generated
+			field, err := client.Property.GetPropertyField(groupID, fieldID)
+			if err != nil {
+				client.Log.Error("Failed to get field for option extraction",
+					"name", def.Name,
+					"field_id", fieldID,
+					"error", err.Error())
+				continue
+			}
+
+			// Extract option IDs from the field attributes
+			if optionsRaw, ok := field.Attrs[model.PropertyFieldAttributeOptions]; ok {
+				// Convert options to JSON and back to extract IDs
+				optionsJSON, err := json.Marshal(optionsRaw)
+				if err != nil {
+					client.Log.Error("Failed to marshal options",
+						"name", def.Name,
+						"error", err.Error())
+					continue
+				}
+
+				var options []map[string]interface{}
+				if err := json.Unmarshal(optionsJSON, &options); err != nil {
+					client.Log.Error("Failed to unmarshal options",
+						"name", def.Name,
+						"error", err.Error())
+					continue
+				}
+
+				// Build option name to ID mapping (only for "programs" field currently)
+				if def.ExternalName == "programs" {
+					for _, opt := range options {
+						if name, ok := opt["name"].(string); ok {
+							if id, ok := opt["id"].(string); ok {
+								cache.ProgramOptionNameToID[name] = id
+							}
+						}
+					}
+					client.Log.Debug("Extracted program option IDs",
+						"option_count", len(cache.ProgramOptionNameToID))
+				}
+			}
 		}
 	}
 
@@ -171,9 +213,14 @@ func SyncFields(client *pluginapi.Client, groupID string) error {
 		client.Log.Warn("Some fields failed to sync",
 			"failed_count", len(failedFields),
 			"failed_fields", failedFields)
-		// Don't return error - partial success is acceptable
+		// Return partial cache even on failures
 	}
 
-	client.Log.Info("Field sync completed", "total", len(fieldDefinitions), "failed", len(failedFields))
-	return nil
+	client.Log.Info("Field sync completed",
+		"total", len(fieldDefinitions),
+		"failed", len(failedFields),
+		"fields_cached", len(cache.FieldNameToID),
+		"options_cached", len(cache.ProgramOptionNameToID))
+
+	return cache, nil
 }

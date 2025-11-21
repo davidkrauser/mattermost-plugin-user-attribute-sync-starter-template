@@ -12,6 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testFieldIDCache creates a FieldIDCache with test data for use in tests
+func testFieldIDCache() *FieldIDCache {
+	return &FieldIDCache{
+		FieldNameToID: map[string]string{
+			"job_title":  "test_field_id_1",
+			"programs":   "test_field_id_2",
+			"start_date": "test_field_id_3",
+		},
+		ProgramOptionNameToID: map[string]string{
+			"Apples":  "test_opt_id_apples",
+			"Oranges": "test_opt_id_oranges",
+			"Lemons":  "test_opt_id_lemons",
+		},
+	}
+}
+
 func TestFormatStringValue(t *testing.T) {
 	t.Run("simple text value", func(t *testing.T) {
 		result, err := formatStringValue("Engineering")
@@ -98,29 +114,31 @@ func TestFormatStringValue(t *testing.T) {
 }
 
 func TestFormatMultiselectValue(t *testing.T) {
+	cache := testFieldIDCache()
+
 	t.Run("multiple option values", func(t *testing.T) {
-		result, err := formatMultiselectValue("programs", []string{"Apples", "Oranges"})
+		result, err := formatMultiselectValue("programs", []string{"Apples", "Oranges"}, cache)
 		require.NoError(t, err)
 
 		// Verify it's properly JSON-encoded array of IDs
 		var decoded []string
 		err = json.Unmarshal(result, &decoded)
 		require.NoError(t, err)
-		assert.Equal(t, []string{OptionIDApples, OptionIDOranges}, decoded)
+		assert.Equal(t, []string{"test_opt_id_apples", "test_opt_id_oranges"}, decoded)
 	})
 
 	t.Run("single option value", func(t *testing.T) {
-		result, err := formatMultiselectValue("programs", []string{"Lemons"})
+		result, err := formatMultiselectValue("programs", []string{"Lemons"}, cache)
 		require.NoError(t, err)
 
 		var decoded []string
 		err = json.Unmarshal(result, &decoded)
 		require.NoError(t, err)
-		assert.Equal(t, []string{OptionIDLemons}, decoded)
+		assert.Equal(t, []string{"test_opt_id_lemons"}, decoded)
 	})
 
 	t.Run("empty array", func(t *testing.T) {
-		result, err := formatMultiselectValue("programs", []string{})
+		result, err := formatMultiselectValue("programs", []string{}, cache)
 		require.NoError(t, err)
 
 		// Empty array should be encoded as []
@@ -133,13 +151,13 @@ func TestFormatMultiselectValue(t *testing.T) {
 	})
 
 	t.Run("unknown option returns error", func(t *testing.T) {
-		_, err := formatMultiselectValue("programs", []string{"UnknownProgram"})
+		_, err := formatMultiselectValue("programs", []string{"UnknownProgram"}, cache)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown program option")
 	})
 
 	t.Run("unexpected multiselect field returns error", func(t *testing.T) {
-		_, err := formatMultiselectValue("not_programs", []string{"Value1"})
+		_, err := formatMultiselectValue("not_programs", []string{"Value1"}, cache)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected multiselect field")
 	})
@@ -151,6 +169,7 @@ func TestBuildPropertyValues(t *testing.T) {
 		Id:    "user123",
 		Email: "test@example.com",
 	}
+	cache := testFieldIDCache()
 
 	t.Run("builds values for all field types", func(t *testing.T) {
 		api := &plugintest.API{}
@@ -163,7 +182,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"programs":   []interface{}{"Apples", "Oranges"},
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
 		require.NoError(t, err)
 		assert.Len(t, values, 3) // email excluded
 
@@ -186,7 +205,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"programs": []string{"Apples", "Lemons"},
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
 		require.NoError(t, err)
 		assert.Len(t, values, 1)
 
@@ -194,7 +213,7 @@ func TestBuildPropertyValues(t *testing.T) {
 		var optionIDs []string
 		err = json.Unmarshal(values[0].Value, &optionIDs)
 		require.NoError(t, err)
-		assert.Equal(t, []string{OptionIDApples, OptionIDLemons}, optionIDs)
+		assert.Equal(t, []string{"test_opt_id_apples", "test_opt_id_lemons"}, optionIDs)
 	})
 
 	t.Run("skips email field", func(t *testing.T) {
@@ -205,7 +224,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"email": "test@example.com",
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
 	})
@@ -225,7 +244,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"field_name", "unknown_field",
 			"user_email", "test@example.com")
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
 		require.NoError(t, err)
 		assert.Len(t, values, 1) // Only job_title
 
@@ -247,7 +266,7 @@ func TestBuildPropertyValues(t *testing.T) {
 			"user_email", "test@example.com",
 			"value_type", "int")
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
 
@@ -260,7 +279,7 @@ func TestBuildPropertyValues(t *testing.T) {
 
 		userAttrs := map[string]interface{}{}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
 	})
@@ -268,6 +287,7 @@ func TestBuildPropertyValues(t *testing.T) {
 
 func TestSyncUsers(t *testing.T) {
 	groupID := "test-group-id"
+	cache := testFieldIDCache()
 
 	t.Run("successfully syncs multiple users", func(t *testing.T) {
 		api := &plugintest.API{}
@@ -294,7 +314,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		api.AssertExpectations(t)
@@ -321,7 +341,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		api.AssertExpectations(t)
@@ -353,7 +373,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		api.AssertExpectations(t)
@@ -374,7 +394,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		api.AssertExpectations(t)
@@ -417,7 +437,7 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		api.AssertExpectations(t)
@@ -429,7 +449,7 @@ func TestSyncUsers(t *testing.T) {
 
 		users := []map[string]interface{}{}
 
-		err := SyncUsers(client, groupID, users)
+		err := SyncUsers(client, groupID, users, cache)
 		require.NoError(t, err)
 
 		api.AssertExpectations(t)

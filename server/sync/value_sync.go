@@ -20,7 +20,7 @@ func formatStringValue(value string) (json.RawMessage, error) {
 
 // formatMultiselectValue converts multiselect option names to option IDs in JSON format.
 // Multiselect fields store arrays of option IDs, not human-readable names.
-func formatMultiselectValue(fieldName string, values []string) (json.RawMessage, error) {
+func formatMultiselectValue(fieldName string, values []string, cache *FieldIDCache) (json.RawMessage, error) {
 	if fieldName != "programs" {
 		return nil, fmt.Errorf("unexpected multiselect field: %s", fieldName)
 	}
@@ -28,7 +28,7 @@ func formatMultiselectValue(fieldName string, values []string) (json.RawMessage,
 	// Translate option names to IDs
 	optionIDs := make([]string, 0, len(values))
 	for _, optionName := range values {
-		optionID := GetProgramOptionID(optionName)
+		optionID := cache.GetProgramOptionID(optionName)
 		if optionID == "" {
 			return nil, fmt.Errorf("unknown program option: %s", optionName)
 		}
@@ -44,7 +44,7 @@ func formatMultiselectValue(fieldName string, values []string) (json.RawMessage,
 }
 
 // buildPropertyValues creates PropertyValue objects for a single user's attributes.
-func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string, userAttrs map[string]interface{}) ([]*model.PropertyValue, error) {
+func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string, userAttrs map[string]interface{}, cache *FieldIDCache) ([]*model.PropertyValue, error) {
 	values := make([]*model.PropertyValue, 0, len(userAttrs))
 
 	for fieldName, fieldValue := range userAttrs {
@@ -54,7 +54,7 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 			continue
 		}
 
-		fieldID := GetFieldID(fieldName)
+		fieldID := cache.GetFieldID(fieldName)
 		if fieldID == "" {
 			api.Log.Warn("Unknown field name, skipping",
 				"field_name", fieldName,
@@ -75,11 +75,11 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 					stringValues = append(stringValues, str)
 				}
 			}
-			formattedValue, formatErr = formatMultiselectValue(fieldName, stringValues)
+			formattedValue, formatErr = formatMultiselectValue(fieldName, stringValues, cache)
 
 		case []string:
 			// Multiselect - already string array
-			formattedValue, formatErr = formatMultiselectValue(fieldName, v)
+			formattedValue, formatErr = formatMultiselectValue(fieldName, v, cache)
 
 		case string:
 			// Text or date
@@ -118,7 +118,7 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 // SyncUsers writes attribute values from external data into Mattermost CPAs for all users.
 //
 //nolint:revive // SyncUsers is the conventional name for this orchestrator function
-func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}) error {
+func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache *FieldIDCache) error {
 	for _, userAttrs := range users {
 		email, ok := userAttrs["email"].(string)
 		if !ok || email == "" {
@@ -135,7 +135,7 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 			continue
 		}
 
-		values, err := buildPropertyValues(api, user, groupID, userAttrs)
+		values, err := buildPropertyValues(api, user, groupID, userAttrs, cache)
 		if err != nil {
 			api.Log.Error("Failed to build property values, skipping user",
 				"user_email", email,

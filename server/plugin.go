@@ -26,6 +26,9 @@ type Plugin struct {
 	// cpaGroupID is ID of the standard group used for Custom Profile Attributes
 	cpaGroupID string
 
+	// fieldIDCache stores mappings from external field/option names to Mattermost-generated IDs
+	fieldIDCache *attrsync.FieldIDCache
+
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
 
@@ -46,12 +49,11 @@ func (p *Plugin) OnActivate() error {
 	}
 	p.cpaGroupID = group.ID
 
-	// Sync hardcoded field definitions on plugin activation
-	// Since fields are hardcoded and unchanging, we only need to create/update them
-	// once when the plugin starts. This ensures fields exist and match our definitions.
-	err = attrsync.SyncFields(p.client, p.cpaGroupID)
+	// Sync field definitions on plugin activation and load their IDs
+	// Creates/updates CPA fields and stores the auto-generated IDs for use during value sync.
+	p.fieldIDCache, err = attrsync.SyncFields(p.client, p.cpaGroupID)
 	if err != nil {
-		return errors.Wrap(err, "failed to sync hardcoded field definitions")
+		return errors.Wrap(err, "failed to sync field definitions")
 	}
 	p.client.Log.Info("Field sync completed successfully")
 

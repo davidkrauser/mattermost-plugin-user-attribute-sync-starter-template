@@ -8,12 +8,6 @@ import (
 	"github.com/mattermost/user-attribute-sync-starter-template/server/sync"
 )
 
-// syncIntervalMinutes defines how often the attribute sync job runs.
-// This is hardcoded to keep the template simple - developers can modify this
-// value directly based on their needs. For production use, consider making
-// this configurable via plugin settings.
-const syncIntervalMinutes = 60
-
 // nextWaitInterval calculates the duration to wait before the next sync execution.
 // This function is called by the cluster job scheduler to determine when to run
 // the sync job next.
@@ -25,14 +19,22 @@ const syncIntervalMinutes = 60
 // - Ensures consistent sync intervals regardless of how long sync takes
 // - First run happens immediately on plugin activation for quick feedback
 // - Uses cluster.JobMetadata to track execution history across restarts
+// - Reads interval from plugin configuration to allow runtime customization
 func (p *Plugin) nextWaitInterval(now time.Time, metadata cluster.JobMetadata) time.Duration {
+	// Get the configured sync interval (defaults to 60 minutes if not set)
+	config := p.getConfiguration()
+	syncIntervalMinutes := config.SyncIntervalMinutes
+	if syncIntervalMinutes < 1 {
+		syncIntervalMinutes = 60 // Fallback to default if invalid
+	}
+
 	// First run - execute immediately
 	if metadata.LastFinished.IsZero() {
 		return 0
 	}
 
 	// Calculate next scheduled run time
-	nextRunTime := metadata.LastFinished.Add(syncIntervalMinutes * time.Minute)
+	nextRunTime := metadata.LastFinished.Add(time.Duration(syncIntervalMinutes) * time.Minute)
 
 	// If next run time is in the past, run immediately
 	if nextRunTime.Before(now) {
@@ -45,7 +47,7 @@ func (p *Plugin) nextWaitInterval(now time.Time, metadata cluster.JobMetadata) t
 
 // runSync executes the user attribute value synchronization workflow.
 //
-// This function runs periodically (every syncIntervalMinutes) to synchronize
+// This function runs periodically (at the interval configured in plugin settings) to synchronize
 // user attribute values from external sources into Mattermost Custom Profile Attributes.
 //
 // Note: Field schema synchronization (creating/updating PropertyFields) happens

@@ -21,6 +21,15 @@
     "settings_schema": {
         "header": "",
         "footer": "",
-        "settings": []
+        "settings": [
+            {
+                "key": "SyncIntervalMinutes",
+                "display_name": "Sync Interval (Minutes)",
+                "type": "number",
+                "help_text": "How often (in minutes) the plugin should sync user attributes from the external source. Minimum value is 1 minute.",
+                "default": 60,
+                "placeholder": "60"
+            }
+        ]
     }
 }

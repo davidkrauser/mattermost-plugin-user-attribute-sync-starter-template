@@ -30,8 +30,6 @@ func NewFileProvider() *FileProvider {
 // On subsequent calls, it checks if the file has been modified since the last read:
 //   - If modified: reads and returns the updated user data
 //   - If unchanged: returns an empty array to signal no new data
-//
-// This enables incremental synchronization without maintaining separate metadata files.
 func (f *FileProvider) GetUserAttributes() ([]map[string]interface{}, error) {
 	// Get file modification time
 	fileInfo, err := os.Stat(f.filePath)

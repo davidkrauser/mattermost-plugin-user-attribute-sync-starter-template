@@ -17,7 +17,14 @@ type Plugin struct {
 	// client is the Mattermost server API client.
 	client *pluginapi.Client
 
+	// backgroundJob runs attribute sync on the configured time interval.
 	backgroundJob *cluster.Job
+
+	// fileProvider provides an example of syncing user attribute data from external source.
+	fileProvider attrsync.AttributeProvider
+
+	// cpaGroupID is ID of the standard group used for Custom Profile Attributes
+	cpaGroupID string
 
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
@@ -31,21 +38,25 @@ type Plugin struct {
 func (p *Plugin) OnActivate() error {
 	p.client = pluginapi.NewClient(p.API, p.Driver)
 
-	// Sync hardcoded field definitions on plugin activation
-	// Since fields are hardcoded and unchanging, we only need to create/update them
-	// once when the plugin starts. This ensures fields exist and match our definitions.
-	// If fields already exist, they'll be updated to match (idempotent operation).
-	p.client.Log.Info("Syncing hardcoded field definitions on plugin activation")
-	groupID, err := attrsync.GetOrRegisterCPAGroup(p.client)
+	// "custom_profile_attributes" is the standard group name for Custom Profile Attributes.
+	// This group is automatically created by Mattermost core and is used for all CPA fields.
+	group, err := p.client.Property.GetPropertyGroup("custom_profile_attributes")
 	if err != nil {
 		return errors.Wrap(err, "failed to get Custom Profile Attributes group")
 	}
+	p.cpaGroupID = group.ID
 
-	err = attrsync.SyncFields(p.client, groupID)
+	// Sync hardcoded field definitions on plugin activation
+	// Since fields are hardcoded and unchanging, we only need to create/update them
+	// once when the plugin starts. This ensures fields exist and match our definitions.
+	err = attrsync.SyncFields(p.client, p.cpaGroupID)
 	if err != nil {
 		return errors.Wrap(err, "failed to sync hardcoded field definitions")
 	}
 	p.client.Log.Info("Field sync completed successfully")
+
+	// Initialize the file provider
+	p.fileProvider = attrsync.NewFileProvider()
 
 	// Set up the attribute sync cluster job
 	// This job runs periodically to synchronize user attribute values from external
@@ -68,11 +79,16 @@ func (p *Plugin) OnActivate() error {
 }
 
 // OnDeactivate is invoked when the plugin is deactivated.
-// Cleans up the attribute sync cluster job to prevent orphaned jobs.
+// Cleans up the attribute sync cluster job and file provider to prevent orphaned resources.
 func (p *Plugin) OnDeactivate() error {
 	if p.backgroundJob != nil {
 		if err := p.backgroundJob.Close(); err != nil {
 			p.API.LogError("Failed to close attribute sync job", "err", err)
+		}
+	}
+	if p.fileProvider != nil {
+		if err := p.fileProvider.Close(); err != nil {
+			p.API.LogError("Failed to close file provider", "err", err)
 		}
 	}
 	return nil

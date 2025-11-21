@@ -10,6 +10,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/mattermost/user-attribute-sync-starter-template/server/command"
 	"github.com/mattermost/user-attribute-sync-starter-template/server/store/kvstore"
+	attrsync "github.com/mattermost/user-attribute-sync-starter-template/server/sync"
 	"github.com/pkg/errors"
 )
 
@@ -44,10 +45,26 @@ func (p *Plugin) OnActivate() error {
 
 	p.commandClient = command.NewCommandHandler(p.client)
 
+	// Sync hardcoded field definitions on plugin activation
+	// Since fields are hardcoded and unchanging, we only need to create/update them
+	// once when the plugin starts. This ensures fields exist and match our definitions.
+	// If fields already exist, they'll be updated to match (idempotent operation).
+	p.client.Log.Info("Syncing hardcoded field definitions on plugin activation")
+	groupID, err := attrsync.GetOrRegisterCPAGroup(p.client)
+	if err != nil {
+		return errors.Wrap(err, "failed to get Custom Profile Attributes group")
+	}
+
+	err = attrsync.SyncFields(p.client, groupID)
+	if err != nil {
+		return errors.Wrap(err, "failed to sync hardcoded field definitions")
+	}
+	p.client.Log.Info("Field sync completed successfully")
+
 	// Set up the attribute sync cluster job
-	// This job runs periodically to synchronize user attributes from external sources
-	// to Mattermost Custom Profile Attributes. Using cluster.Schedule ensures only
-	// one server instance runs the job in multi-server deployments (automatic
+	// This job runs periodically to synchronize user attribute values from external
+	// sources to Mattermost Custom Profile Attributes. Using cluster.Schedule ensures
+	// only one server instance runs the job in multi-server deployments (automatic
 	// leader election and failover).
 	job, err := cluster.Schedule(
 		p.API,

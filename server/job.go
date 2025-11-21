@@ -5,7 +5,6 @@ import (
 
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 
-	"github.com/mattermost/user-attribute-sync-starter-template/server/store/kvstore"
 	"github.com/mattermost/user-attribute-sync-starter-template/server/sync"
 )
 
@@ -44,28 +43,28 @@ func (p *Plugin) nextWaitInterval(now time.Time, metadata cluster.JobMetadata) t
 	return nextRunTime.Sub(now)
 }
 
-// runSync executes the complete attribute synchronization workflow.
+// runSync executes the user attribute value synchronization workflow.
 //
-// This is the main orchestrator that coordinates:
+// This function runs periodically (every syncIntervalMinutes) to synchronize
+// user attribute values from external sources into Mattermost Custom Profile Attributes.
+//
+// Note: Field schema synchronization (creating/updating PropertyFields) happens
+// once during plugin activation in OnActivate(). Since fields are hardcoded and
+// unchanging, there's no need to sync them on every run.
+//
+// This orchestrator coordinates:
 //  1. Data fetching from external source via AttributeProvider
-//  2. Field schema synchronization (create/update PropertyFields)
-//  3. Value synchronization (upsert PropertyValues for all users)
+//  2. Value synchronization (upsert PropertyValues for all users)
 //
-// The function uses graceful degradation - field-level and user-level failures
-// are logged but don't stop the entire sync. This ensures maximum progress even
-// with partial data quality issues.
-//
-// Why this design:
-//   - FieldCache loaded once and reused across both field and value sync
-//   - Failed field creation doesn't prevent other fields from syncing
-//   - Failed user value sync doesn't prevent other users from syncing
-//   - All operations logged with context for debugging
+// The function uses graceful degradation - user-level failures are logged but
+// don't stop the entire sync. This ensures maximum progress even with partial
+// data quality issues.
 //
 // Error handling strategy:
 //   - Provider initialization failure → abort (nothing to sync)
-//   - FetchChanged failure → abort (no data to process)
-//   - Field sync continues despite individual field failures
+//   - Fetch failure → abort (no data to process)
 //   - Value sync continues despite individual user failures
+//   - All operations logged with context for debugging
 func (p *Plugin) runSync() {
 	p.client.Log.Info("Sync starting")
 
@@ -86,26 +85,16 @@ func (p *Plugin) runSync() {
 
 	p.client.Log.Info("Fetched users for sync", "count", len(users))
 
-	// Get or register Custom Profile Attributes group
+	// Get Custom Profile Attributes group ID
+	// The group and fields were already created during plugin activation
 	groupID, err := sync.GetOrRegisterCPAGroup(p.client)
 	if err != nil {
 		p.client.Log.Error("Failed to get CPA group", "error", err.Error())
 		return
 	}
 
-	// Initialize FieldCache
-	store := kvstore.NewKVStore(p.client)
-	cache := sync.NewFieldCache(store)
-
-	// Sync fields (creates/updates PropertyFields, populates cache)
-	_, err = sync.SyncFields(p.client, groupID, users, cache)
-	if err != nil {
-		p.client.Log.Error("Failed to sync fields", "error", err.Error())
-		return
-	}
-
-	// Sync user values (upserts PropertyValues using cache)
-	err = sync.SyncUsers(p.client, groupID, users, cache)
+	// Sync user values (upserts PropertyValues using hardcoded field mappings)
+	err = sync.SyncUsers(p.client, groupID, users)
 	if err != nil {
 		p.client.Log.Error("Failed to sync user values", "error", err.Error())
 		return

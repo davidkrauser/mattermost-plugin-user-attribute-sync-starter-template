@@ -48,36 +48,36 @@ func formatStringValue(value string) (json.RawMessage, error) {
 // This function converts an array of option names from external data into the
 // array of option IDs that Mattermost expects.
 //
-// Uses FieldCache for fast in-memory option name → ID lookups without repeated
-// KVStore reads. The cache was populated during field synchronization.
+// Uses hardcoded programOptionNameToID mapping for fast lookups without any
+// storage or caching overhead.
 //
 // Args:
-//   - cache: FieldCache containing option mappings
-//   - fieldName: Name of the multiselect field (for cache lookup)
-//   - values: Array of option names (e.g., ["Level1", "Level2"])
+//   - fieldName: Name of the multiselect field (must be "programs")
+//   - values: Array of option names (e.g., ["Apples", "Oranges"])
 //
 // Returns:
 //   - json.RawMessage containing JSON-encoded array of option IDs
-//   - Error if any option name not found in cache or marshaling fails
+//   - Error if field is not "programs" or any option name not found
 //
 // Example:
 //
-//	Input:  cache (with mappings), fieldName="security_clearance", values=["Level1", "Level2"]
-//	Cache:  {"Level1": "opt_abc123", "Level2": "opt_def456"}
-//	Output: json.RawMessage(`["opt_abc123","opt_def456"]`)
+//	Input:  fieldName="programs", values=["Apples", "Oranges"]
+//	Output: json.RawMessage(`["option_apples","option_oranges"]`)
 //
 // Missing options are treated as errors because they indicate data inconsistency
-// between the external system and Mattermost field definitions.
-func formatMultiselectValue(cache FieldCache, fieldName string, values []string) (json.RawMessage, error) {
-	// Convert option names to option IDs
+// between the external system and the hardcoded schema.
+func formatMultiselectValue(fieldName string, values []string) (json.RawMessage, error) {
+	// Only "programs" field is multiselect in the hardcoded schema
+	if fieldName != "programs" {
+		return nil, fmt.Errorf("unexpected multiselect field: %s", fieldName)
+	}
+
+	// Convert option names to option IDs using hardcoded mapping
 	optionIDs := make([]string, 0, len(values))
 	for _, optionName := range values {
-		optionID, err := cache.GetOptionID(fieldName, optionName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get option ID for %s.%s: %w", fieldName, optionName, err)
-		}
+		optionID := GetProgramOptionID(optionName)
 		if optionID == "" {
-			return nil, fmt.Errorf("option %s not found for field %s", optionName, fieldName)
+			return nil, fmt.Errorf("unknown program option: %s", optionName)
 		}
 		optionIDs = append(optionIDs, optionID)
 	}
@@ -94,8 +94,8 @@ func formatMultiselectValue(cache FieldCache, fieldName string, values []string)
 // buildPropertyValues constructs PropertyValue objects for all attributes of a user.
 //
 // This function prepares a batch of PropertyValues for a single user, ready to be
-// upserted to Mattermost via the PropertyService API. It handles all three field types
-// (text, date, multiselect) by inferring the type from the value structure.
+// upserted to Mattermost via the PropertyService API. It uses the hardcoded field
+// schema to map external field names to Mattermost field IDs.
 //
 // The function skips the "email" field (used for user resolution only, not synced as
 // an attribute) and continues processing even if individual fields fail, collecting
@@ -106,17 +106,16 @@ func formatMultiselectValue(cache FieldCache, fieldName string, values []string)
 //   - user: The Mattermost user to build values for
 //   - groupID: Property group ID (custom_profile_attributes)
 //   - userAttrs: Map of attribute names to values from external system
-//   - cache: FieldCache for looking up field IDs and option IDs
 //
 // Returns:
 //   - Array of PropertyValue objects ready for bulk upsert
 //   - Error if critical failure occurs (individual field failures are logged and skipped)
 //
-// Type inference (matches field creation logic):
-//   - []string value → multiselect (convert option names to IDs)
-//   - string matching YYYY-MM-DD → date (JSON-encode as string)
-//   - other string → text (JSON-encode as string)
-func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string, userAttrs map[string]interface{}, cache FieldCache) ([]*model.PropertyValue, error) {
+// Type handling:
+//   - []interface{} or []string → multiselect (convert option names to IDs)
+//   - string → text or date field (JSON-encode as string)
+//   - Unknown fields are skipped with a warning
+func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string, userAttrs map[string]interface{}) ([]*model.PropertyValue, error) {
 	values := make([]*model.PropertyValue, 0, len(userAttrs))
 
 	for fieldName, fieldValue := range userAttrs {
@@ -125,17 +124,16 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 			continue
 		}
 
-		// Look up field ID from cache
-		fieldID, err := cache.GetFieldID(fieldName)
-		if err != nil {
-			api.Log.Warn("Failed to get field ID, skipping field",
+		// Look up field ID from hardcoded mapping
+		fieldID := GetFieldID(fieldName)
+		if fieldID == "" {
+			api.Log.Warn("Unknown field name, skipping",
 				"field_name", fieldName,
-				"user_email", user.Email,
-				"error", err.Error())
+				"user_email", user.Email)
 			continue
 		}
 
-		// Infer type and format value
+		// Format value based on type
 		var formattedValue json.RawMessage
 		var formatErr error
 
@@ -148,11 +146,11 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 					stringValues = append(stringValues, str)
 				}
 			}
-			formattedValue, formatErr = formatMultiselectValue(cache, fieldName, stringValues)
+			formattedValue, formatErr = formatMultiselectValue(fieldName, stringValues)
 
 		case []string:
 			// Multiselect field - already string array
-			formattedValue, formatErr = formatMultiselectValue(cache, fieldName, v)
+			formattedValue, formatErr = formatMultiselectValue(fieldName, v)
 
 		case string:
 			// Text or date field
@@ -197,14 +195,13 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 //
 // For each user:
 //  1. Resolve Mattermost user by email
-//  2. Build PropertyValues for all attributes
+//  2. Build PropertyValues for all attributes using hardcoded field mappings
 //  3. Bulk upsert values via PropertyService API
 //
 // Args:
 //   - api: Mattermost API client
 //   - groupID: Property group ID (custom_profile_attributes)
 //   - users: Array of user attribute maps from external system
-//   - cache: FieldCache for field and option ID lookups
 //
 // Returns:
 //   - Error only if critical failure occurs (individual user failures are logged)
@@ -219,7 +216,7 @@ func buildPropertyValues(api *pluginapi.Client, user *model.User, groupID string
 // quality issues or have been removed from Mattermost.
 //
 //nolint:revive // SyncUsers is the conventional name for this orchestrator function
-func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}, cache FieldCache) error {
+func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interface{}) error {
 	for _, userAttrs := range users {
 		// Extract email for user resolution
 		email, ok := userAttrs["email"].(string)
@@ -238,7 +235,7 @@ func SyncUsers(api *pluginapi.Client, groupID string, users []map[string]interfa
 		}
 
 		// Build PropertyValues for this user
-		values, err := buildPropertyValues(api, user, groupID, userAttrs, cache)
+		values, err := buildPropertyValues(api, user, groupID, userAttrs)
 		if err != nil {
 			api.Log.Error("Failed to build property values, skipping user",
 				"user_email", email,

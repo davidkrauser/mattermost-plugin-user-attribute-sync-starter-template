@@ -99,41 +99,28 @@ func TestFormatStringValue(t *testing.T) {
 
 func TestFormatMultiselectValue(t *testing.T) {
 	t.Run("multiple option values", func(t *testing.T) {
-		cache := &mockFieldCache{}
-		cache.On("GetOptionID", "security_clearance", "Level1").Return("opt_abc123", nil)
-		cache.On("GetOptionID", "security_clearance", "Level3").Return("opt_ghi789", nil)
-
-		result, err := formatMultiselectValue(cache, "security_clearance", []string{"Level1", "Level3"})
+		result, err := formatMultiselectValue("programs", []string{"Apples", "Oranges"})
 		require.NoError(t, err)
 
 		// Verify it's properly JSON-encoded array of IDs
 		var decoded []string
 		err = json.Unmarshal(result, &decoded)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"opt_abc123", "opt_ghi789"}, decoded)
-
-		cache.AssertExpectations(t)
+		assert.Equal(t, []string{OptionIDApples, OptionIDOranges}, decoded)
 	})
 
 	t.Run("single option value", func(t *testing.T) {
-		cache := &mockFieldCache{}
-		cache.On("GetOptionID", "programs", "Apples").Return("opt_aaa111", nil)
-
-		result, err := formatMultiselectValue(cache, "programs", []string{"Apples"})
+		result, err := formatMultiselectValue("programs", []string{"Lemons"})
 		require.NoError(t, err)
 
 		var decoded []string
 		err = json.Unmarshal(result, &decoded)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"opt_aaa111"}, decoded)
-
-		cache.AssertExpectations(t)
+		assert.Equal(t, []string{OptionIDLemons}, decoded)
 	})
 
 	t.Run("empty array", func(t *testing.T) {
-		cache := &mockFieldCache{}
-
-		result, err := formatMultiselectValue(cache, "programs", []string{})
+		result, err := formatMultiselectValue("programs", []string{})
 		require.NoError(t, err)
 
 		// Empty array should be encoded as []
@@ -143,43 +130,18 @@ func TestFormatMultiselectValue(t *testing.T) {
 		err = json.Unmarshal(result, &decoded)
 		require.NoError(t, err)
 		assert.Equal(t, []string{}, decoded)
-
-		cache.AssertExpectations(t)
 	})
 
-	t.Run("missing option returns error", func(t *testing.T) {
-		cache := &mockFieldCache{}
-		cache.On("GetOptionID", "security_clearance", "Level1").Return("opt_abc123", nil)
-		cache.On("GetOptionID", "security_clearance", "Level99").Return("", assert.AnError)
-
-		_, err := formatMultiselectValue(cache, "security_clearance", []string{"Level1", "Level99"})
+	t.Run("unknown option returns error", func(t *testing.T) {
+		_, err := formatMultiselectValue("programs", []string{"UnknownProgram"})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "Level99")
-		assert.Contains(t, err.Error(), "security_clearance")
-
-		cache.AssertExpectations(t)
+		assert.Contains(t, err.Error(), "unknown program option")
 	})
 
-	t.Run("missing field returns error", func(t *testing.T) {
-		cache := &mockFieldCache{}
-		cache.On("GetOptionID", "nonexistent_field", "Value1").Return("", assert.AnError)
-
-		_, err := formatMultiselectValue(cache, "nonexistent_field", []string{"Value1"})
+	t.Run("unexpected multiselect field returns error", func(t *testing.T) {
+		_, err := formatMultiselectValue("not_programs", []string{"Value1"})
 		require.Error(t, err)
-
-		cache.AssertExpectations(t)
-	})
-
-	t.Run("empty option ID returns error", func(t *testing.T) {
-		cache := &mockFieldCache{}
-		cache.On("GetOptionID", "programs", "Oranges").Return("", nil)
-
-		_, err := formatMultiselectValue(cache, "programs", []string{"Oranges"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "Oranges")
-		assert.Contains(t, err.Error(), "not found")
-
-		cache.AssertExpectations(t)
+		assert.Contains(t, err.Error(), "unexpected multiselect field")
 	})
 }
 
@@ -194,21 +156,14 @@ func TestBuildPropertyValues(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
-		cache.On("GetFieldID", "start_date").Return("field_date", nil)
-		cache.On("GetFieldID", "programs").Return("field_prog", nil)
-		cache.On("GetOptionID", "programs", "Apples").Return("opt_apple", nil)
-		cache.On("GetOptionID", "programs", "Oranges").Return("opt_orange", nil)
-
 		userAttrs := map[string]interface{}{
 			"email":      "test@example.com", // Should be skipped
-			"department": "Engineering",
+			"job_title":  "Software Engineer",
 			"start_date": "2023-01-15",
 			"programs":   []interface{}{"Apples", "Oranges"},
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 3) // email excluded
 
@@ -220,25 +175,18 @@ func TestBuildPropertyValues(t *testing.T) {
 			assert.NotEmpty(t, v.FieldID)
 			assert.NotEmpty(t, v.Value)
 		}
-
-		cache.AssertExpectations(t)
 	})
 
 	t.Run("handles string array for multiselect", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "tags").Return("field_tags", nil)
-		cache.On("GetOptionID", "tags", "Tag1").Return("opt_tag1", nil)
-		cache.On("GetOptionID", "tags", "Tag2").Return("opt_tag2", nil)
-
 		userAttrs := map[string]interface{}{
-			"email": "test@example.com",
-			"tags":  []string{"Tag1", "Tag2"},
+			"email":    "test@example.com",
+			"programs": []string{"Apples", "Lemons"},
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 1)
 
@@ -246,123 +194,75 @@ func TestBuildPropertyValues(t *testing.T) {
 		var optionIDs []string
 		err = json.Unmarshal(values[0].Value, &optionIDs)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"opt_tag1", "opt_tag2"}, optionIDs)
-
-		cache.AssertExpectations(t)
+		assert.Equal(t, []string{OptionIDApples, OptionIDLemons}, optionIDs)
 	})
 
 	t.Run("skips email field", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		cache := &mockFieldCache{}
-
 		userAttrs := map[string]interface{}{
 			"email": "test@example.com",
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
-
-		cache.AssertExpectations(t)
 	})
 
-	t.Run("skips field with missing field ID", func(t *testing.T) {
+	t.Run("skips unknown field", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "unknown_field").Return("", assert.AnError)
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
-
-		// Expect log warning for unknown field
-		api.On("LogWarn", "Failed to get field ID, skipping field",
-			"field_name", "unknown_field",
-			"user_email", "test@example.com",
-			"error", assert.AnError.Error())
 
 		userAttrs := map[string]interface{}{
 			"email":         "test@example.com",
 			"unknown_field": "value",
-			"department":    "Engineering",
+			"job_title":     "Software Engineer",
 		}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
-		require.NoError(t, err)
-		assert.Len(t, values, 1) // Only department
+		// Expect log warning for unknown field
+		api.On("LogWarn", "Unknown field name, skipping",
+			"field_name", "unknown_field",
+			"user_email", "test@example.com")
 
-		cache.AssertExpectations(t)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs)
+		require.NoError(t, err)
+		assert.Len(t, values, 1) // Only job_title
+
+		api.AssertExpectations(t)
 	})
 
 	t.Run("skips field with unsupported type", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "bad_field").Return("field_bad", nil)
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
+		userAttrs := map[string]interface{}{
+			"email":     "test@example.com",
+			"job_title": 123, // Unsupported type
+		}
 
 		// Expect log warning for unsupported type
 		api.On("LogWarn", "Unsupported field value type, skipping field",
-			"field_name", "bad_field",
+			"field_name", "job_title",
 			"user_email", "test@example.com",
 			"value_type", "int")
 
-		userAttrs := map[string]interface{}{
-			"email":      "test@example.com",
-			"bad_field":  123, // Unsupported type
-			"department": "Engineering",
-		}
-
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs)
 		require.NoError(t, err)
-		assert.Len(t, values, 1) // Only department
+		assert.Len(t, values, 0)
 
-		cache.AssertExpectations(t)
-	})
-
-	t.Run("skips field with format error", func(t *testing.T) {
-		api := &plugintest.API{}
-		client := pluginapi.NewClient(api, &plugintest.Driver{})
-
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "programs").Return("field_prog", nil)
-		cache.On("GetOptionID", "programs", "InvalidOption").Return("", assert.AnError)
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
-
-		// Expect log warning for format error
-		api.On("LogWarn", "Failed to format field value, skipping field",
-			"field_name", "programs",
-			"user_email", "test@example.com",
-			"error", "failed to get option ID for programs.InvalidOption: assert.AnError general error for testing")
-
-		userAttrs := map[string]interface{}{
-			"email":      "test@example.com",
-			"programs":   []string{"InvalidOption"},
-			"department": "Engineering",
-		}
-
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
-		require.NoError(t, err)
-		assert.Len(t, values, 1) // Only department
-
-		cache.AssertExpectations(t)
+		api.AssertExpectations(t)
 	})
 
 	t.Run("handles empty attributes", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		cache := &mockFieldCache{}
-
 		userAttrs := map[string]interface{}{}
 
-		values, err := buildPropertyValues(client, user, groupID, userAttrs, cache)
+		values, err := buildPropertyValues(client, user, groupID, userAttrs)
 		require.NoError(t, err)
 		assert.Len(t, values, 0)
-
-		cache.AssertExpectations(t)
 	})
 }
 
@@ -372,10 +272,6 @@ func TestSyncUsers(t *testing.T) {
 	t.Run("successfully syncs multiple users", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
-		cache.On("GetFieldID", "location").Return("field_loc", nil)
 
 		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
 		user2 := &model.User{Id: "user2", Email: "user2@example.com"}
@@ -387,30 +283,26 @@ func TestSyncUsers(t *testing.T) {
 
 		users := []map[string]interface{}{
 			{
-				"email":      "user1@example.com",
-				"department": "Engineering",
-				"location":   "US-East",
+				"email":     "user1@example.com",
+				"job_title": "Software Engineer",
+				"programs":  []interface{}{"Apples"},
 			},
 			{
-				"email":      "user2@example.com",
-				"department": "Sales",
-				"location":   "US-West",
+				"email":     "user2@example.com",
+				"job_title": "Sales Manager",
+				"programs":  []interface{}{"Lemons"},
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users)
 		require.NoError(t, err)
 
-		cache.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})
 
 	t.Run("skips user without email", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
 
 		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
 
@@ -421,27 +313,23 @@ func TestSyncUsers(t *testing.T) {
 
 		users := []map[string]interface{}{
 			{
-				"department": "Engineering", // Missing email
+				"job_title": "Software Engineer", // Missing email
 			},
 			{
-				"email":      "user1@example.com",
-				"department": "Sales",
+				"email":     "user1@example.com",
+				"job_title": "Sales Manager",
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users)
 		require.NoError(t, err)
 
-		cache.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})
 
 	t.Run("skips user not found in Mattermost", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
 
 		user2 := &model.User{Id: "user2", Email: "user2@example.com"}
 
@@ -456,27 +344,24 @@ func TestSyncUsers(t *testing.T) {
 
 		users := []map[string]interface{}{
 			{
-				"email":      "notfound@example.com",
-				"department": "Engineering",
+				"email":     "notfound@example.com",
+				"job_title": "Software Engineer",
 			},
 			{
-				"email":      "user2@example.com",
-				"department": "Sales",
+				"email":     "user2@example.com",
+				"job_title": "Sales Manager",
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users)
 		require.NoError(t, err)
 
-		cache.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})
 
 	t.Run("skips user with empty attributes", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-
-		cache := &mockFieldCache{}
 
 		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
 
@@ -489,19 +374,15 @@ func TestSyncUsers(t *testing.T) {
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users)
 		require.NoError(t, err)
 
-		cache.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})
 
 	t.Run("continues sync when upsert fails for one user", func(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
-
-		cache := &mockFieldCache{}
-		cache.On("GetFieldID", "department").Return("field_dept", nil)
 
 		user1 := &model.User{Id: "user1", Email: "user1@example.com"}
 		user2 := &model.User{Id: "user2", Email: "user2@example.com"}
@@ -527,19 +408,18 @@ func TestSyncUsers(t *testing.T) {
 
 		users := []map[string]interface{}{
 			{
-				"email":      "user1@example.com",
-				"department": "Engineering",
+				"email":     "user1@example.com",
+				"job_title": "Software Engineer",
 			},
 			{
-				"email":      "user2@example.com",
-				"department": "Sales",
+				"email":     "user2@example.com",
+				"job_title": "Sales Manager",
 			},
 		}
 
-		err := SyncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users)
 		require.NoError(t, err)
 
-		cache.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})
 
@@ -547,14 +427,11 @@ func TestSyncUsers(t *testing.T) {
 		api := &plugintest.API{}
 		client := pluginapi.NewClient(api, &plugintest.Driver{})
 
-		cache := &mockFieldCache{}
-
 		users := []map[string]interface{}{}
 
-		err := SyncUsers(client, groupID, users, cache)
+		err := SyncUsers(client, groupID, users)
 		require.NoError(t, err)
 
-		cache.AssertExpectations(t)
 		api.AssertExpectations(t)
 	})
 }

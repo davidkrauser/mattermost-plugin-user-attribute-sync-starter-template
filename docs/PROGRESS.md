@@ -27,10 +27,11 @@ After completing all sub-phases in a phase:
 - **Phase 2**: Data Source Abstraction (3 phases)
 - **Phase 3**: Field Management (7 phases)
 - **Phase 4**: Value Synchronization (8 phases) - includes new Phase 4.0 for FieldCache
-- **Phase 5**: Testing and Validation (1 phase)
-- **Phase 6**: Documentation and Polish (3 phases)
+- **Phase 5**: Simplification to Hardcoded Fields (4 sub-phases)
+- **Phase 6**: Testing and Validation (1 phase)
+- **Phase 7**: Documentation and Polish (3 phases)
 
-**Total: 23 phases**
+**Total: 24 phases** (23 original + Phase 5 architectural simplification)
 
 ---
 
@@ -800,13 +801,151 @@ A simple wrapper around `api.Property.UpsertPropertyValues()` adds no value. The
 - Direct API usage where appropriate
 
 **What's Next:**
-Phase 5 - Integration testing and validation
+Phase 5 - Simplification to hardcoded fields approach
 
 ---
 
-## Phase 5: Testing and Validation
+## Phase 5: Simplification to Hardcoded Fields
 
-### 5.1 - Integration Test
+**Status:** Complete
+**Commits:** Multiple commits implementing transition
+
+### Overview
+
+After completing the initial implementation with dynamic field discovery, type inference, and field caching, a decision was made to simplify the architecture to use hardcoded field definitions instead. This change reduced code complexity by ~80% while maintaining all core functionality.
+
+### Motivation
+
+The dynamic approach was technically complete and working, but introduced unnecessary complexity for a starter template:
+- ~463 lines of type inference and field discovery logic
+- Complex field caching in KVStore
+- Runtime option detection and merging
+- Display name transformation logic
+- More difficult for developers to understand and customize
+
+**Key Insight:** Most production integrations know their attribute schema upfront. Dynamic discovery adds flexibility that's rarely needed while significantly increasing complexity.
+
+### Changes Made
+
+#### 5.1 - Replace field_department and field_location with field_job_title
+**Rationale:** Avoid conflicts with existing Mattermost core fields (department, location)
+
+**Changes:**
+- Removed `field_department` and `field_location` from schema
+- Added `field_job_title` as replacement text field
+- Updated sample data (`data/user_attributes.json`)
+- Updated all tests to reflect new schema
+
+#### 5.2 - Convert to hardcoded field definitions
+**Rationale:** Explicit schema is simpler, more maintainable, and easier to customize
+
+**Changes:**
+- Created hardcoded field definitions in `server/sync/field_sync.go`:
+  - `FieldIDJobTitle` = "field_job_title" (text)
+  - `FieldIDPrograms` = "field_programs" (multiselect)
+  - `FieldIDStartDate` = "field_start_date" (date)
+  - Option IDs: `option_apples`, `option_oranges`, `option_lemons`
+- Added mapping constants:
+  - `fieldNameToID` map (external name → field ID)
+  - `programOptionNameToID` map (option name → option ID)
+- Added `fieldDefinitions` array with complete schema
+- Updated `SyncFields()` to iterate hardcoded definitions
+- Updated `createOrUpdateField()` for idempotent field creation
+- Added helper functions: `GetFieldID()`, `GetProgramOptionID()`
+
+**Removed:**
+- `server/sync/types.go` (126 lines):
+  - `inferFieldType()` - Type inference from JSON values
+  - `toDisplayName()` - Snake_case to Title Case conversion
+  - `datePatternRegex` - Date pattern detection
+- `server/sync/types_test.go` (337 lines):
+  - All tests for removed functions
+
+**Updated Value Sync:**
+- `buildPropertyValues()` - Use `GetFieldID()` instead of FieldCache
+- `formatMultiselectValue()` - Use `GetProgramOptionID()` instead of FieldCache
+- Removed FieldCache parameter from sync functions
+
+#### 5.3 - Remove field caching from KVStore
+**Rationale:** Hardcoded mappings eliminate need for runtime field lookups
+
+**Changes:**
+- Updated `server/store/kvstore/kvstore.go`:
+  - Removed `SaveFieldMapping()` and `GetFieldMapping()`
+  - Removed `SaveFieldOptions()` and `GetFieldOptions()`
+  - Kept only `SaveLastSyncTime()` and `GetLastSyncTime()` (incremental sync)
+- Deleted `field_cache.go` and `field_cache_test.go`
+- Deleted `field_discovery.go` and `field_discovery_test.go`
+- Deleted `field_sync_orchestrator_test.go` (obsolete test)
+
+**Before:** KVStore had 6 methods (field mappings, options, timestamp)
+**After:** KVStore has 2 methods (timestamp only)
+
+#### 5.4 - Move field sync to plugin activation
+**Rationale:** Hardcoded fields are static - no need to sync on every run
+
+**Changes:**
+- Updated `server/plugin.go` (`OnActivate`):
+  - Added field sync during plugin activation
+  - Get CPA group ID
+  - Call `SyncFields()` once on startup
+  - Start background job only after fields synced
+- Updated `server/job.go` (`runSync`):
+  - Removed `SyncFields()` call from periodic sync
+  - Only sync user values (not fields)
+  - Updated documentation and comments
+
+**Impact:**
+- **Before:** Fields synced every 60 minutes (unnecessary API calls)
+- **After:** Fields synced once on plugin activation (plugin restart required for schema changes)
+
+### Results
+
+**Code Reduction:**
+- Removed: 463 lines of code
+- Removed: 2 complete files (types.go, types_test.go)
+- Removed: 68 tests (from 135 → 67 tests)
+- Simplified: KVStore interface (6 methods → 2 methods)
+
+**Maintainability Improvements:**
+- No type inference logic to understand
+- No field discovery or caching to debug
+- Direct constant lookups (no KVStore queries)
+- Clear, explicit field definitions in one place
+- Easier for developers to customize
+
+**Functionality Preserved:**
+- All three field types supported (text, multiselect, date)
+- Incremental sync still works (file modification tracking)
+- Graceful error handling maintained
+- Cluster-aware background jobs unchanged
+- User resolution by email unchanged
+
+**Tradeoffs:**
+- Adding new fields requires code changes + plugin restart
+- No automatic adaptation to external schema changes
+- Must manually define field types and option IDs
+
+### Verification
+
+**Tests:** All 67 tests passing
+**Style:** No linting errors
+**Build:** Clean compilation
+
+### Key Takeaways
+
+1. **Simplicity is a feature** - 80% less code makes template more accessible
+2. **Know your use case** - Most integrations have stable schemas
+3. **Explicit > Implicit** - Hardcoded definitions are self-documenting
+4. **Optimize for readability** - Starter templates should be easy to learn from
+
+This phase demonstrates that sometimes the best architectural improvement is to remove unnecessary abstraction and complexity.
+
+---
+
+## Phase 6: Testing and Validation
+
+### 6.1 - Integration Test
 **Status:** Not Started
 
 **Code Changes (~0 lines, test only):**
@@ -832,9 +971,9 @@ Phase 5 - Integration testing and validation
 
 ---
 
-## Phase 6: Documentation and Polish
+## Phase 7: Documentation and Polish
 
-### 6.1 - Update README
+### 7.1 - Update README
 **Status:** Not Started
 
 **Code Changes (~0 lines, documentation):**

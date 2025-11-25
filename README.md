@@ -1,223 +1,208 @@
-# Plugin Starter Template
+# User Attribute Sync Starter Template
 
-[![Build Status](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/ci.yml/badge.svg)](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/ci.yml)
-[![E2E Status](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/e2e.yml/badge.svg)](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/e2e.yml)
+A Mattermost plugin starter template that demonstrates how to synchronize user profile attributes from external systems into Mattermost's Custom Profile Attributes (CPA). This template serves as both a working reference implementation and an educational resource for plugin developers.
 
-This plugin serves as a starting point for writing a Mattermost plugin. Feel free to base your own plugin off this repository.
+## What This Template Demonstrates
 
-To learn more about plugins, see [our plugin documentation](https://developers.mattermost.com/extend/plugins/).
+Mattermost's Custom Profile Attributes system (also called Properties) allows you to store structured metadata about users. A **field** defines the schema (name, type, options), while a **value** stores the actual data for a specific user. For multiselect fields, **options** define the allowed choices that users can select from.
 
-This template requires node v16 and npm v8. You can download and install nvm to manage your node versions by following the instructions [here](https://github.com/nvm-sh/nvm). Once you've setup the project simply run `nvm i` within the root folder to use the suggested version of node.
+This plugin demonstrates how to create fields with hardcoded definitions and synchronize values from external data sources. Fields are defined explicitly in code with their types (text, date, multiselect), and the plugin uses Mattermost's cluster job system to run periodic synchronization tasks. The implementation includes incremental synchronization that processes only changed data after the initial sync.
 
-## Getting Started
-Use GitHub's template feature to make a copy of this repository by clicking the "Use this template" button.
+The template creates three example fields: Job Title (text), Programs (multiselect with options Apples, Oranges, and Lemons), and Start Date (date in YYYY-MM-DD format). All fields are marked as hidden (not shown in profile/user card) and admin-managed (users cannot edit).
 
-Alternatively shallow clone the repository matching your plugin name:
+## Architecture Overview
+
 ```
-git clone --depth 1 https://github.com/mattermost/mattermost-plugin-starter-template com.example.my-plugin
+Plugin Activation (Once)
+  ├─> Create/Update CPA Fields
+  └─> Start Background Job
+
+Background Job (On timed interval)
+  ├─> Fetch Changed Values From External Source
+  └─> Bulk Upsert Values
 ```
 
-Note that this project uses [Go modules](https://github.com/golang/go/wiki/Modules). Be sure to locate the project outside of `$GOPATH`.
+### Key Components
 
-Edit the following files:
-1. `plugin.json` with your `id`, `name`, and `description`:
-```json
+- **Field Definitions** (`server/sync/field_sync.go`) - Hardcoded schema with field types and options
+- **Value Sync** (`server/sync/value_sync.go`) - User attribute value synchronization
+- **File Provider** (`server/sync/file_provider.go`) - Example JSON file-based data source
+- **Job Orchestrator** (`server/job.go`) - Cluster-aware periodic sync scheduler
+
+## Building from Source
+
+### Prerequisites
+
+- Mattermost server 11.1.0 or later
+- Go 1.21 or later
+- Node v16 and npm v8 (if modifying webapp)
+
+### Installation
+
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/mattermost/mattermost-plugin-user-attribute-sync-starter-template
+   cd mattermost-plugin-user-attribute-sync-starter-template
+   ```
+
+2. Build the plugin:
+   ```bash
+   make
+   ```
+
+3. **Important**: Copy the example data file to your Mattermost data directory:
+   ```bash
+   cp data/user_attributes.json /path/to/mattermost/data/user_attributes.json
+   ```
+
+   The plugin reads from `data/user_attributes.json` relative to the Mattermost data directory (not the plugin directory). Update the JSON file with your users' email addresses and attributes. See `data/user_attributes.json` in this repository for the expected format.
+
+4. Upload the plugin through System Console → Plugin Management, or use:
+   ```bash
+   make deploy
+   ```
+
+## What to Expect
+
+When the plugin activates, it creates the three Custom Profile Attribute fields (Job Title, Programs, and Start Date) in Mattermost. These fields appear in System Console → User Attributes. If the fields already exist from a previous activation, the plugin updates them to match the hardcoded definitions.
+
+Immediately after activation, the plugin runs its first synchronization. It reads the `user_attributes.json` file from the Mattermost data directory, matches users by email address, and populates the Custom Profile Attribute values for each user found in the data file. The plugin logs its progress and any errors (such as users not found in Mattermost) during this process.
+
+After the initial sync, the plugin checks for changes every 60 minutes by default. The file provider tracks the modification time of `user_attributes.json` and only processes the file if it has been modified since the last sync. When changes are detected, the plugin syncs all users in the file again. You can adjust the sync interval in the plugin configuration settings.
+
+The synced attribute values are stored as Custom Profile Attributes and can be viewed through the Mattermost API or by querying the database directly. Since the fields are marked as hidden, they do not appear in user profiles or user cards in the UI.
+
+## Customization Guide
+
+### Adding New Fields
+
+Edit `server/sync/field_sync.go` and add entries to the `fieldDefinitions` array:
+
+```go
 {
-    "id": "com.example.my-plugin",
-    "name": "My Plugin",
-    "description": "A plugin to enhance Mattermost."
-}
+    Name:         "Department",
+    ExternalName: "department",
+    Type:         model.PropertyFieldTypeText,
+},
 ```
 
-2. `go.mod` with your Go module path, following the `<hosting-site>/<repository>/<module>` convention:
-```
-module github.com/example/my-plugin
+Restart the plugin to create the new field.
+
+### Changing Multiselect Options
+
+Update the `OptionNames` array in `fieldDefinitions`:
+
+```go
+{
+    Name:         "Programs",
+    ExternalName: "programs",
+    Type:         model.PropertyFieldTypeMultiselect,
+    OptionNames:  []string{"Apples", "Oranges", "Lemons", "Bananas"},
+},
 ```
 
-3. Replace all occurrences of `github.com/mattermost/mattermost-plugin-starter-template` in the codebase with your Go module path:
-```bash
-sed -i '' 's|github.com/mattermost/mattermost-plugin-starter-template|github.com/example/my-plugin|g' server/*.go
+Restart the plugin to add new options. This template plugin never removes existing options from Mattermost because users may have already selected those values.
+
+### Changing Sync Interval
+
+The sync interval can be configured in the plugin settings. Navigate to System Console → Plugins → User Attribute Sync Starter Template and adjust the "Sync Interval (Minutes)" setting. The default is 60 minutes.
+
+### Changing Data File Path
+
+Edit `server/sync/file_provider.go` and modify the constant:
+
+```go
+const defaultDataFilePath = "data/my_custom_file.json"
 ```
 
-4. Replace `.golangci.yml` `local-prefixes` attribute with your Go module path:
-```yml
-linters-settings:
-  # [...]
-  goimports:
-    local-prefixes: github.com/example/my-plugin
-```
+### Implementing Custom Data Sources
 
-5. Build your plugin:
-```
-make
-```
+The template uses a file-based provider, but you can swap this for any data source:
 
-This will produce a single plugin file (with support for multiple architectures) for upload to your Mattermost server:
+1. **Implement the `AttributeProvider` interface** in a new file (e.g., `server/sync/api_provider.go`):
+   - `GetUserAttributes()` - Fetch user data from your external system
+   - `Close()` - Clean up resources
 
-```
-dist/com.example.my-plugin.tar.gz
-```
+2. **Update `server/job.go`** to use your provider:
+   ```go
+   provider := sync.NewAPIProvider(apiURL, apiKey)
+   ```
+
+3. **Handle incremental sync** by tracking state internally (e.g., last sync timestamp)
+
+Common provider implementations:
+- **REST API**: Poll external API for changed users since last sync
+- **LDAP**: Query directory for users modified after last sync time
+- **Database**: Query users table with `updated_at > last_sync`
+- **Webhook**: Accept push notifications of changed users (requires API endpoint)
+
+### Field Type Constraints
+
+**Important**: Field types cannot be changed after creation (Mattermost platform limitation). To change a field type:
+1. Delete the field (all user values will be lost). You can do this via the Mattermost API or by adding code to delete the field during plugin activation.
+2. Update the field definition in code
+3. Restart the plugin to recreate with new type
 
 ## Development
 
-To avoid having to manually install your plugin, build and deploy your plugin using one of the following options. In order for the below options to work, you must first enable plugin uploads via your config.json or API and restart Mattermost.
+### Project Structure
 
-```json
-    "PluginSettings" : {
-        ...
-        "EnableUploads" : true
-    }
+```
+.
+├── server/
+│   ├── sync/
+│   │   ├── field_sync.go       # Field creation and schema management
+│   │   ├── value_sync.go       # User attribute value synchronization
+│   │   ├── provider.go         # AttributeProvider interface
+│   │   └── file_provider.go    # File-based provider implementation
+│   ├── plugin.go               # Plugin lifecycle (OnActivate/OnDeactivate)
+│   └── job.go                  # Background job orchestration
+├── data/
+│   └── user_attributes.json    # Example data file
+└── README.md
 ```
 
-### Development guidance
+### Running Tests
 
-1. Fewer packages is better: default to the main package unless there's good reason for a new package.
+```bash
+make test           # Run all unit tests
+make check-style    # Run linting
+make all            # Run check-style, test, and build
+```
 
-2. Coupling implies same package: don't jump through hoops to break apart code that's naturally coupled.
+### Local Development
 
-3. New package for a new interface: a classic example is the sqlstore with layers for monitoring performance, caching and mocking.
-
-4. New package for upstream integration: a discrete client package for interfacing with a 3rd party is often a great place to break out into a new package
-
-### Modifying the server boilerplate
-
-The server code comes with some boilerplate for creating an api, using slash commands, accessing the kvstore and using the cluster package for jobs.
-
-#### Api
-
-api.go implements the ServeHTTP hook which allows the plugin to implement the http.Handler interface. Requests destined for the `/plugins/{id}` path will be routed to the plugin. This file also contains a sample `HelloWorld` endpoint that is tested in plugin_test.go.
-
-#### Command package
-
-This package contains the boilerplate for adding a slash command and an instance of it is created in the `OnActivate` hook in plugin.go. If you don't need it you can delete the package and remove any reference to `commandClient` in plugin.go. The package also contains an example of how to create a mock for testing.
-
-#### KVStore package
-
-This is a central place for you to access the KVStore methods that are available in the `pluginapi.Client`. The package contains an interface for you to define your methods that will wrap the KVStore methods. An instance of the KVStore is created in the `OnActivate` hook.
-
-### Deploying with Local Mode
-
-If your Mattermost server is running locally, you can enable [local mode](https://docs.mattermost.com/administration/mmctl-cli-tool.html#local-mode) to streamline deploying your plugin. Edit your server configuration as follows:
+Enable local mode in your Mattermost server configuration:
 
 ```json
 {
     "ServiceSettings": {
-        ...
         "EnableLocalMode": true,
         "LocalModeSocketLocation": "/var/tmp/mattermost_local.socket"
-    },
+    }
 }
 ```
 
-and then deploy your plugin:
-```
-make deploy
-```
+Then deploy automatically on changes:
 
-You may also customize the Unix socket path:
 ```bash
-export MM_LOCALSOCKETPATH=/var/tmp/alternate_local.socket
 make deploy
 ```
 
-If developing a plugin with a webapp, watch for changes and deploy those automatically:
+For continuous deployment during development:
+
 ```bash
 export MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-export MM_ADMIN_TOKEN=j44acwd8obn78cdcx7koid4jkr
+export MM_ADMIN_TOKEN=your_token_here
 make watch
 ```
 
-### Deploying with credentials
+## License
 
-Alternatively, you can authenticate with the server's API with credentials:
-```bash
-export MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-export MM_ADMIN_USERNAME=admin
-export MM_ADMIN_PASSWORD=password
-make deploy
-```
+See LICENSE file for details.
 
-or with a [personal access token](https://docs.mattermost.com/developer/personal-access-tokens.html):
-```bash
-export MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-export MM_ADMIN_TOKEN=j44acwd8obn78cdcx7koid4jkr
-make deploy
-```
+## Questions or Issues?
 
-### Releasing new versions
+This is a starter template meant to be customized for your specific use case. The code is designed to be read, understood, and modified. Start by exploring the `server/sync/` directory to understand how each component works, then adapt it to your external system.
 
-The version of a plugin is determined at compile time, automatically populating a `version` field in the [plugin manifest](plugin.json):
-* If the current commit matches a tag, the version will match after stripping any leading `v`, e.g. `1.3.1`.
-* Otherwise, the version will combine the nearest tag with `git rev-parse --short HEAD`, e.g. `1.3.1+d06e53e1`.
-* If there is no version tag, an empty version will be combined with the short hash, e.g. `0.0.0+76081421`.
-
-To disable this behaviour, manually populate and maintain the `version` field.
-
-## How to Release
-
-To trigger a release, follow these steps:
-
-1. **For Patch Release:** Run the following command:
-    ```
-    make patch
-    ```
-   This will release a patch change.
-
-2. **For Minor Release:** Run the following command:
-    ```
-    make minor
-    ```
-   This will release a minor change.
-
-3. **For Major Release:** Run the following command:
-    ```
-    make major
-    ```
-   This will release a major change.
-
-4. **For Patch Release Candidate (RC):** Run the following command:
-    ```
-    make patch-rc
-    ```
-   This will release a patch release candidate.
-
-5. **For Minor Release Candidate (RC):** Run the following command:
-    ```
-    make minor-rc
-    ```
-   This will release a minor release candidate.
-
-6. **For Major Release Candidate (RC):** Run the following command:
-    ```
-    make major-rc
-    ```
-   This will release a major release candidate.
-
-## Q&A
-
-### How do I make a server-only or web app-only plugin?
-
-Simply delete the `server` or `webapp` folders and remove the corresponding sections from `plugin.json`. The build scripts will skip the missing portions automatically.
-
-### How do I include assets in the plugin bundle?
-
-Place them into the `assets` directory. To use an asset at runtime, build the path to your asset and open as a regular file:
-
-```go
-bundlePath, err := p.API.GetBundlePath()
-if err != nil {
-    return errors.Wrap(err, "failed to get bundle path")
-}
-
-profileImage, err := ioutil.ReadFile(filepath.Join(bundlePath, "assets", "profile_image.png"))
-if err != nil {
-    return errors.Wrap(err, "failed to read profile image")
-}
-
-if appErr := p.API.SetProfileImage(userID, profileImage); appErr != nil {
-    return errors.Wrap(err, "failed to set profile image")
-}
-```
-
-### How do I build the plugin with unminified JavaScript?
-Setting the `MM_DEBUG` environment variable will invoke the debug builds. The simplist way to do this is to simply include this variable in your calls to `make` (e.g. `make dist MM_DEBUG=1`).
+For Mattermost plugin development questions, see the [plugin documentation](https://developers.mattermost.com/extend/plugins/).

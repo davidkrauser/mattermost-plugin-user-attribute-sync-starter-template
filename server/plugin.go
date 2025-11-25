@@ -1,16 +1,12 @@
 package main
 
 import (
-	"net/http"
 	"sync"
-	"time"
 
-	"github.com/mattermost/mattermost-plugin-starter-template/server/command"
-	"github.com/mattermost/mattermost-plugin-starter-template/server/store/kvstore"
-	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
+	attrsync "github.com/mattermost/user-attribute-sync-starter-template/server/sync"
 	"github.com/pkg/errors"
 )
 
@@ -18,16 +14,20 @@ import (
 type Plugin struct {
 	plugin.MattermostPlugin
 
-	// kvstore is the client used to read/write KV records for this plugin.
-	kvstore kvstore.KVStore
-
 	// client is the Mattermost server API client.
 	client *pluginapi.Client
 
-	// commandClient is the client used to register and execute slash commands.
-	commandClient command.Command
-
+	// backgroundJob runs attribute sync on the configured time interval.
 	backgroundJob *cluster.Job
+
+	// fileProvider provides an example of syncing user attribute data from external source.
+	fileProvider attrsync.AttributeProvider
+
+	// cpaGroupID is ID of the standard group used for Custom Profile Attributes
+	cpaGroupID string
+
+	// fieldIDCache stores mappings from external field/option names to Mattermost-generated IDs
+	fieldIDCache *attrsync.FieldIDCache
 
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
@@ -41,18 +41,37 @@ type Plugin struct {
 func (p *Plugin) OnActivate() error {
 	p.client = pluginapi.NewClient(p.API, p.Driver)
 
-	p.kvstore = kvstore.NewKVStore(p.client)
+	// "custom_profile_attributes" is the standard group name for Custom Profile Attributes.
+	// This group is automatically created by Mattermost core and is used for all CPA fields.
+	group, err := p.client.Property.GetPropertyGroup("custom_profile_attributes")
+	if err != nil {
+		return errors.Wrap(err, "failed to get Custom Profile Attributes group")
+	}
+	p.cpaGroupID = group.ID
 
-	p.commandClient = command.NewCommandHandler(p.client)
+	// Sync field definitions on plugin activation and load their IDs
+	// Creates/updates CPA fields and stores the auto-generated IDs for use during value sync.
+	p.fieldIDCache, err = attrsync.SyncFields(p.client, p.cpaGroupID)
+	if err != nil {
+		return errors.Wrap(err, "failed to sync field definitions")
+	}
+	p.client.Log.Info("Field sync completed successfully")
 
+	// Initialize the file provider
+	p.fileProvider = attrsync.NewFileProvider()
+
+	// Set up the attribute sync cluster job
+	// This job runs periodically to synchronize user attribute values from external
+	// sources to Mattermost Custom Profile Attributes. Using cluster.Schedule ensures
+	// only one server instance runs the job in multi-server deployments.
 	job, err := cluster.Schedule(
 		p.API,
-		"BackgroundJob",
-		cluster.MakeWaitForRoundedInterval(1*time.Hour),
-		p.runJob,
+		"AttributeSync",
+		p.nextWaitInterval,
+		p.runSync,
 	)
 	if err != nil {
-		return errors.Wrap(err, "failed to schedule background job")
+		return errors.Wrap(err, "failed to schedule attribute sync job")
 	}
 
 	p.backgroundJob = job
@@ -61,22 +80,19 @@ func (p *Plugin) OnActivate() error {
 }
 
 // OnDeactivate is invoked when the plugin is deactivated.
+// Cleans up the attribute sync cluster job and file provider to prevent orphaned resources.
 func (p *Plugin) OnDeactivate() error {
 	if p.backgroundJob != nil {
 		if err := p.backgroundJob.Close(); err != nil {
-			p.API.LogError("Failed to close background job", "err", err)
+			p.API.LogError("Failed to close attribute sync job", "err", err)
+		}
+	}
+	if p.fileProvider != nil {
+		if err := p.fileProvider.Close(); err != nil {
+			p.API.LogError("Failed to close file provider", "err", err)
 		}
 	}
 	return nil
-}
-
-// This will execute the commands that were registered in the NewCommandHandler function.
-func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
-	response, err := p.commandClient.Handle(args)
-	if err != nil {
-		return nil, model.NewAppError("ExecuteCommand", "plugin.command.execute_command.app_error", nil, err.Error(), http.StatusInternalServerError)
-	}
-	return response, nil
 }
 
 // See https://developers.mattermost.com/extend/plugins/server/reference/

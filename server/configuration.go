@@ -18,6 +18,9 @@ import (
 // If you add non-reference types to your configuration struct, be sure to rewrite Clone as a deep
 // copy appropriate for your types.
 type configuration struct {
+	// SyncIntervalMinutes determines how often (in minutes) the plugin syncs user attributes
+	// from the external source. Must be at least 1 minute.
+	SyncIntervalMinutes int
 }
 
 // Clone shallow copies the configuration. Your implementation may require a deep copy if

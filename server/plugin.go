@@ -63,8 +63,7 @@ func (p *Plugin) OnActivate() error {
 	// Set up the attribute sync cluster job
 	// This job runs periodically to synchronize user attribute values from external
 	// sources to Mattermost Custom Profile Attributes. Using cluster.Schedule ensures
-	// only one server instance runs the job in multi-server deployments (automatic
-	// leader election and failover).
+	// only one server instance runs the job in multi-server deployments.
 	job, err := cluster.Schedule(
 		p.API,
 		"AttributeSync",

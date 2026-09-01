@@ -42,7 +42,7 @@ func ReadStoredUserAttrs(client *pluginapi.Client) (StoredUserAttrs, error) {
 }
 
 // KVStoreProvider implements AttributeProvider by reading user attribute data an admin uploaded
-// through the System Console, which the plugin stores in Mattermost's KV store.  THe KV Store lives in
+// through the System Console, which the plugin stores in Mattermost's KV store.  The KV Store lives in
 // Mattermost's Postgres database, which is a more stable storage location than file systems in a
 // cloud environment.
 //

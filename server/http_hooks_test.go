@@ -378,7 +378,7 @@ func TestHandleDeleteUserAttributes(t *testing.T) {
 			Return(false, model.NewAppError("KVSetWithOptions", "kv.set.app_error", nil, "connection refused", http.StatusInternalServerError)).Once()
 
 		resp := doRequest(t, p, http.MethodDelete, "/user_attributes", userID, nil)
-		requireErrorResponse(t, resp, http.StatusForbidden, "failed to delete file")
+		requireErrorResponse(t, resp, http.StatusInternalServerError, "failed to delete file")
 	})
 }
 

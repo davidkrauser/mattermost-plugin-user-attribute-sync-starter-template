@@ -126,7 +126,6 @@ func (p *Plugin) handleDownloadUserAttributes(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(stored.Data); err != nil {
 		p.API.LogError("Failed to write file in response", "err", err.Error())
-		p.errorWithJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 }
@@ -153,7 +152,8 @@ func (p *Plugin) handleUserAttributesStatus(w http.ResponseWriter, r *http.Reque
 // which it reports as an error on every subsequent sync until a replacement is uploaded.
 func (p *Plugin) handleDeleteUserAttributes(w http.ResponseWriter, r *http.Request) {
 	if err := p.client.KV.Delete(sync.UserAttrsStoreKey); err != nil {
-		p.errorWithJSON(w, http.StatusForbidden, "failed to delete file")
+		p.client.Log.Error("failed to delete user attributes", "err", err)
+		p.errorWithJSON(w, http.StatusInternalServerError, "failed to delete file")
 		return
 	}
 
